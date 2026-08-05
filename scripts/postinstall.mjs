@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { formatInstallSuccess } from "./install-message.mjs";
 
 const globalInstall = process.env.npm_config_global;
 const { version } = JSON.parse(
@@ -6,17 +7,7 @@ const { version } = JSON.parse(
 );
 
 if (globalInstall === "true" || globalInstall === "1") {
-  writeToTerminal(`
-DSCode v${version} installed successfully.
-
-Get started:
-  cd your-project
-  dscode
-
-The first launch will guide you through DeepSeek API setup.
-Run dscode --help to see all commands.
-
-`);
+  writeToTerminal(formatInstallSuccess(version));
 }
 
 function writeToTerminal(message) {

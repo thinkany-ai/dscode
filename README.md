@@ -87,8 +87,9 @@ non-interactive commands and explicit provider-free configuration.
 The aliases `kimi` and `grok` are accepted by `/login` and `--provider`.
 
 When configuring DeepSeek, DSCode masks the API key, then offers an optional API base URL. Press Enter to use
-`https://api.deepseek.com`, or enter a DeepSeek/OpenAI-compatible gateway URL. The key is stored in
-`~/.dscode/auth.json`; the endpoint is stored in `~/.dscode/config.json`, both with `0600`
+`https://api.deepseek.com`, or enter a DeepSeek/OpenAI-compatible gateway URL. By default, credentials
+use the operating system keyring; `~/.dscode/auth.json` is the owner-only fallback for headless hosts
+or unavailable keyring services. The endpoint is stored in `~/.dscode/config.json` with `0600`
 permissions. Resolution order is `--base-url`, `DEEPSEEK_BASE_URL`, saved config, then the official
 DeepSeek URL. To avoid storing a key:
 
@@ -119,14 +120,34 @@ DSCode keeps all of its global state under `~/.dscode`:
 
 ```text
 ~/.dscode/settings.json    TUI and runtime preferences
-~/.dscode/config.json      DeepSeek endpoint
-~/.dscode/auth.json        Provider credentials
+~/.dscode/config.json      DSCode storage policy and DeepSeek endpoint
+~/.dscode/auth.json        Owner-only credential fallback
+~/.dscode/credential-metadata.json  Non-secret keyring index
+~/.dscode/state.sqlite     Thread metadata and desktop runtime state
 ~/.dscode/skills/          Global skills
 ~/.dscode/extensions/      Global extensions
 ~/.dscode/mcp.json         Global MCP servers
 ~/.dscode/hooks.json       Global hooks
-~/.dscode/sessions/        Session history
+~/.dscode/sessions/YYYY/MM/DD/  JSONL session transcripts
+~/.dscode/archived_sessions/   Archived transcripts
 ```
+
+The flat `sessions/*.jsonl` names are hard-link compatibility entries for the current terminal
+runtime; each points to the same inode as its date-partitioned transcript and does not duplicate
+content. JSONL is the transcript source of truth. SQLite contains only searchable thread metadata,
+pin/archive state, and file fingerprints.
+
+Credential and history behavior can be configured in `~/.dscode/config.json`:
+
+```json
+{
+  "cli_auth_credentials_store": "auto",
+  "history": { "persistence": "save-all" }
+}
+```
+
+Credential modes are `auto`, `keyring`, and `file`. Set history persistence to `none` to run new
+sessions without writing transcripts. `DSCODE_SQLITE_HOME` relocates only SQLite state.
 
 Set `DSCODE_HOME` to relocate the directory, or `DSCODE_SESSIONS_DIR` to relocate only session
 history. DSCode does not inherit `PI_CODING_AGENT_DIR`. Existing files under `~/.dscode/agent` are

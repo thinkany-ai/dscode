@@ -1,6 +1,6 @@
 {
   "name": "@thinkany/dscode-core",
-  "version": "0.3.4",
+  "version": "0.3.5",
   "description": "Reusable multi-provider DSCode agent runtime with local sessions, tools, and RPC.",
   "type": "module",
   "license": "MIT",
@@ -35,8 +35,9 @@
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "build:windows-sandbox": "node ../../scripts/build-windows-sandbox.mjs",
     "postbuild": "node -e \"require('node:fs').chmodSync('dist/rpc-entry.js', 0o755)\"",
-    "prepack": "pnpm build",
+    "prepack": "pnpm build && pnpm build:windows-sandbox",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "engines": {
@@ -48,6 +49,7 @@
     "@earendil-works/pi-coding-agent": "^0.83.0",
     "@earendil-works/pi-tui": "^0.83.0",
     "@modelcontextprotocol/sdk": "^1.30.0",
+    "@napi-rs/keyring": "^1.3.0",
     "fast-glob": "^3.3.3",
     "picocolors": "^1.1.1",
     "typebox": "^1.3.7",

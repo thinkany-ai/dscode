@@ -1,6 +1,4 @@
-import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
-import { chmod, mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 import { createInterface } from "node:readline/promises";
@@ -12,6 +10,7 @@ import type {
   Provider,
 } from "@earendil-works/pi-ai";
 import pc from "picocolors";
+import { createDSCodeCredentialStore } from "./credential-store.js";
 import { getDSCodeHome } from "./home.js";
 import {
   defaultModelForProvider,
@@ -22,6 +21,7 @@ import {
 } from "./providers.js";
 import {
   getDSCodeSettingsPath,
+  getDSCodeStorageSettings,
   normalizeDeepSeekBaseUrl,
   saveDeepSeekBaseUrl,
 } from "./settings.js";
@@ -40,8 +40,6 @@ export interface ProviderLoginResult {
   modelId: string;
 }
 
-type AuthFile = Record<string, unknown>;
-
 export type KeyValidation =
   | { status: "valid"; modelAvailable: boolean }
   | { status: "invalid"; message: string }
@@ -55,18 +53,16 @@ export function getDSCodeAuthPath(): string {
   return path.join(getDSCodeAgentDir(), "auth.json");
 }
 
-export async function hasStoredDeepSeekKey(authPath = getDSCodeAuthPath()): Promise<boolean> {
-  const auth = await readAuthFile(authPath);
-  const credential = auth[PROVIDER_ID];
+export async function hasStoredDeepSeekKey(authPath?: string): Promise<boolean> {
+  const credential = await (await credentialStore(authPath)).read(PROVIDER_ID);
   return isApiKeyCredential(credential) && credential.key.trim().length > 0;
 }
 
 export async function hasStoredProviderCredential(
   providerId: SupportedProviderId,
-  authPath = getDSCodeAuthPath(),
+  authPath?: string,
 ): Promise<boolean> {
-  const auth = await readAuthFile(authPath);
-  return isStoredCredential(auth[providerId]);
+  return isStoredCredential(await (await credentialStore(authPath)).read(providerId));
 }
 
 export function hasDeepSeekEnvironmentKey(): boolean {
@@ -75,7 +71,7 @@ export function hasDeepSeekEnvironmentKey(): boolean {
 
 export async function saveDeepSeekKey(
   key: string,
-  authPath = getDSCodeAuthPath(),
+  authPath?: string,
 ): Promise<void> {
   await saveProviderApiKey(PROVIDER_ID, key, authPath);
 }
@@ -83,33 +79,29 @@ export async function saveDeepSeekKey(
 export async function saveProviderApiKey(
   providerId: ApiKeyProviderId,
   key: string,
-  authPath = getDSCodeAuthPath(),
+  authPath?: string,
 ): Promise<void> {
   const trimmed = key.trim();
   if (!trimmed) throw new Error(`${providerDisplayName(providerId)} API key cannot be empty`);
-  const auth = await readAuthFile(authPath);
-  auth[providerId] = { type: "api_key", key: trimmed } satisfies ApiKeyCredential;
-  await writeAuthFile(authPath, auth);
+  await (await credentialStore(authPath)).modify(
+    providerId,
+    async () => ({ type: "api_key", key: trimmed }) satisfies ApiKeyCredential,
+  );
 }
 
 export async function removeStoredDeepSeekKey(
-  authPath = getDSCodeAuthPath(),
+  authPath?: string,
 ): Promise<boolean> {
-  const auth = await readAuthFile(authPath);
-  if (!(PROVIDER_ID in auth)) return false;
-  delete auth[PROVIDER_ID];
-  await writeAuthFile(authPath, auth);
-  return true;
+  return removeStoredProviderCredential(PROVIDER_ID, authPath);
 }
 
 export async function removeStoredProviderCredential(
   providerId: SupportedProviderId,
-  authPath = getDSCodeAuthPath(),
+  authPath?: string,
 ): Promise<boolean> {
-  const auth = await readAuthFile(authPath);
-  if (!(providerId in auth)) return false;
-  delete auth[providerId];
-  await writeAuthFile(authPath, auth);
+  const store = await credentialStore(authPath);
+  if (!(await store.read(providerId))) return false;
+  await store.delete(providerId);
   return true;
 }
 
@@ -195,10 +187,11 @@ export async function runAuthCommand(
     return;
   }
   if (command === "status") {
-    const auth = await readAuthFile(getDSCodeAuthPath());
+    const store = await createDSCodeCredentialStore();
+    const storedProviders = new Set((await store.list()).map((entry) => entry.providerId));
     const providers = SUPPORTED_PROVIDER_IDS.map((providerId) => {
       const environmentKey = providerEnvironmentKey(providerId);
-      const stored = isStoredCredential(auth[providerId]);
+      const stored = storedProviders.has(providerId);
       const environment = Boolean(environmentKey && process.env[environmentKey]?.trim());
       return `${providerId.padEnd(13)} ${stored || environment ? pc.green("configured") : pc.yellow("not configured")}${stored ? " · stored" : ""}${environment ? ` · ${environmentKey}` : ""}`;
     });
@@ -207,7 +200,8 @@ export async function runAuthCommand(
         `Active provider: ${options.providerId}`,
         ...providers,
         `DeepSeek API base URL: ${options.baseUrl}`,
-        `Auth file: ${getDSCodeAuthPath()}`,
+        `Credential store: ${getDSCodeStorageSettings().credentialStore}`,
+        `Credential file fallback: ${getDSCodeAuthPath()}`,
         `DeepSeek config file: ${getDSCodeSettingsPath()}`,
       ].join("\n") + "\n",
     );
@@ -271,7 +265,7 @@ export async function authenticateProvider(
 ): Promise<ProviderLoginResult> {
   const { ModelRuntime } = await import("@earendil-works/pi-coding-agent");
   const runtime = await ModelRuntime.create({
-    authPath: getDSCodeAuthPath(),
+    credentials: await createDSCodeCredentialStore(),
     modelsPath: path.join(getDSCodeAgentDir(), "models.json"),
     allowModelNetwork: false,
   });
@@ -498,32 +492,10 @@ async function confirmLine(prompt: string): Promise<boolean> {
   }
 }
 
-async function readAuthFile(authPath: string): Promise<AuthFile> {
-  try {
-    const parsed = JSON.parse(await readFile(authPath, "utf8")) as unknown;
-    return isRecord(parsed) ? parsed : {};
-  } catch (error) {
-    if (isNodeError(error) && error.code === "ENOENT") return {};
-    if (error instanceof SyntaxError) {
-      throw new Error(`Cannot parse DSCode auth file: ${authPath}`);
-    }
-    throw error;
-  }
-}
-
-async function writeAuthFile(authPath: string, auth: AuthFile): Promise<void> {
-  const directory = path.dirname(authPath);
-  await mkdir(directory, { recursive: true, mode: 0o700 });
-  await chmod(directory, 0o700).catch(() => undefined);
-  const temporaryPath = `${authPath}.${process.pid}.${randomUUID()}.tmp`;
-  try {
-    await writeFile(temporaryPath, `${JSON.stringify(auth, null, 2)}\n`, { mode: 0o600 });
-    await chmod(temporaryPath, 0o600);
-    await rename(temporaryPath, authPath);
-    await chmod(authPath, 0o600);
-  } finally {
-    await unlink(temporaryPath).catch(() => undefined);
-  }
+async function credentialStore(authPath?: string) {
+  return createDSCodeCredentialStore(
+    authPath ? { authPath, mode: "file" } : undefined,
+  );
 }
 
 function optionValue(args: string[], name: string): string | undefined {
@@ -549,8 +521,4 @@ function isStoredCredential(value: unknown): boolean {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function isNodeError(error: unknown): error is NodeJS.ErrnoException {
-  return error instanceof Error && "code" in error;
 }

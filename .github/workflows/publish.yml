@@ -95,6 +95,12 @@ jobs:
           check_package cli "$PACKAGE_NAME" "$PACKAGE_VERSION"
           check_package core "$CORE_PACKAGE_NAME" "$CORE_PACKAGE_VERSION"
 
+      - name: Set up Go for Windows sandbox packaging
+        if: steps.registry.outputs.cli_already_published != 'true' || steps.registry.outputs.core_already_published != 'true'
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.25.x'
+
       - name: Install dependencies
         if: steps.registry.outputs.cli_already_published != 'true' || steps.registry.outputs.core_already_published != 'true'
         run: pnpm install --frozen-lockfile

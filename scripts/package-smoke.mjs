@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -38,21 +39,19 @@ try {
     { mode: 0o600 },
   );
 
-  run("npm", ["pack", "--pack-destination", artifacts], projectRoot);
-  run("npm", ["pack", "./packages/core", "--pack-destination", artifacts], projectRoot);
+  runNpm(["pack", "--pack-destination", artifacts], projectRoot);
+  runNpm(["pack", "./packages/core", "--pack-destination", artifacts], projectRoot);
 
   const cliTarball = path.join(artifacts, `thinkany-dscode-${cliPackage.version}.tgz`);
   const coreTarball = path.join(artifacts, `thinkany-dscode-core-${corePackage.version}.tgz`);
   requireFile(cliTarball);
   requireFile(coreTarball);
 
-  run(
-    "npm",
+  runNpm(
     ["install", "--ignore-scripts", "--no-audit", "--no-fund", "--prefix", cliInstall, cliTarball],
     projectRoot,
   );
-  run(
-    "npm",
+  runNpm(
     ["install", "--ignore-scripts", "--no-audit", "--no-fund", "--prefix", coreInstall, coreTarball],
     projectRoot,
   );
@@ -66,6 +65,31 @@ try {
     "cli.js",
   );
   requireFile(installedCli);
+  verifyWindowsSandboxHelpers(
+    path.join(
+      cliInstall,
+      "node_modules",
+      "@thinkany",
+      "dscode",
+      "packages",
+      "core",
+      "dist",
+      "native",
+      "windows-sandbox",
+    ),
+  );
+  verifyWindowsSandboxHelpers(
+    path.join(
+      coreInstall,
+      "node_modules",
+      "@thinkany",
+      "dscode-core",
+      "dist",
+      "native",
+      "windows-sandbox",
+    ),
+  );
+
   const version = run(process.execPath, [installedCli, "--version"], cliInstall).trim();
   if (version !== cliPackage.version) {
     throw new Error(`Installed CLI returned ${version}; expected ${cliPackage.version}`);
@@ -107,6 +131,45 @@ function run(command, args, cwd, extraEnv = {}) {
     timeout: 120_000,
     stdio: ["ignore", "pipe", "pipe"],
   });
+}
+
+function runNpm(args, cwd, extraEnv = {}) {
+  if (process.platform !== "win32") return run("npm", args, cwd, extraEnv);
+  const npmCli = path.join(
+    path.dirname(process.execPath),
+    "node_modules",
+    "npm",
+    "bin",
+    "npm-cli.js",
+  );
+  requireFile(npmCli);
+  return run(process.execPath, [npmCli, ...args], cwd, extraEnv);
+}
+
+function verifyWindowsSandboxHelpers(nativeRoot) {
+  const nativeManifest = JSON.parse(
+    fs.readFileSync(path.join(nativeRoot, "manifest.json"), "utf8"),
+  );
+  if (
+    nativeManifest?.version !== 1 ||
+    nativeManifest?.protocol !== 1 ||
+    !nativeManifest.files ||
+    typeof nativeManifest.files !== "object" ||
+    Array.isArray(nativeManifest.files)
+  ) {
+    throw new Error("Windows sandbox manifest is missing or incompatible");
+  }
+  for (const relative of [
+    "win32-x64/dscode-windows-sandbox.exe",
+    "win32-arm64/dscode-windows-sandbox.exe",
+  ]) {
+    const helper = path.join(nativeRoot, relative);
+    requireFile(helper);
+    const digest = createHash("sha256").update(fs.readFileSync(helper)).digest("hex");
+    if (nativeManifest.files?.[relative] !== digest) {
+      throw new Error(`Windows sandbox helper checksum mismatch: ${relative}`);
+    }
+  }
 }
 
 function requireFile(file) {

@@ -110,11 +110,14 @@ async function runHooks(
         .replaceAll("{payload}", JSON.stringify(payload))
         .replaceAll("{tool}", typeof payload.tool === "string" ? payload.tool : ""),
     );
-    const invocation = sandboxCommand(
-      [hook.command, ...args].map(shellQuote).join(" "),
-      ctx.cwd,
-      { mode: access.sandbox, network: access.network },
-    );
+    const command =
+      process.platform === "win32" && access.sandbox === "danger-full-access"
+        ? `& ${[hook.command, ...args].map(powerShellQuote).join(" ")}`
+        : [hook.command, ...args].map(shellQuote).join(" ");
+    const invocation = sandboxCommand(command, ctx.cwd, {
+      mode: access.sandbox,
+      network: access.network,
+    });
     const result = await runProcess(invocation.command, invocation.args, {
       cwd: ctx.cwd,
       signal: ctx.signal,
@@ -134,4 +137,8 @@ async function runHooks(
 
 function shellQuote(value: string): string {
   return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
+function powerShellQuote(value: string): string {
+  return `'${value.replaceAll("'", "''")}'`;
 }

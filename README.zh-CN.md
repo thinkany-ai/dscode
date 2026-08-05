@@ -82,8 +82,9 @@ dscode -C /path/to/project
 `/login` 和 `--provider` 也接受 `kimi`、`grok` 这两个易记别名。
 
 配置 DeepSeek 时，DSCode 会遮罩 API key，然后提供可选的 API base URL；直接回车使用
-`https://api.deepseek.com`，也可以填写兼容 DeepSeek/OpenAI 的第三方网关。密钥保存到
-`~/.dscode/auth.json`，endpoint 保存到 `~/.dscode/config.json`，权限均为 `0600`。
+`https://api.deepseek.com`，也可以填写兼容 DeepSeek/OpenAI 的第三方网关。默认优先把凭证保存到
+操作系统钥匙串；无 UI 进程或钥匙串不可用时回退到权限为 `0600` 的 `~/.dscode/auth.json`。
+endpoint 保存到权限为 `0600` 的 `~/.dscode/config.json`。
 优先级为 `--base-url`、`DEEPSEEK_BASE_URL`、本地保存值、DeepSeek 官方地址。如果不希望保存密钥：
 
 ```bash
@@ -113,14 +114,33 @@ DSCode 的全局数据统一保存在 `~/.dscode`：
 
 ```text
 ~/.dscode/settings.json    TUI 与运行时偏好
-~/.dscode/config.json      DeepSeek endpoint
-~/.dscode/auth.json        Provider 凭证
+~/.dscode/config.json      存储策略与 DeepSeek endpoint
+~/.dscode/auth.json        仅当前用户可读的凭证回退
+~/.dscode/credential-metadata.json  不含密钥的钥匙串索引
+~/.dscode/state.sqlite     会话元数据与桌面运行状态
 ~/.dscode/skills/          全局 skills
 ~/.dscode/extensions/      全局 extensions
 ~/.dscode/mcp.json         全局 MCP servers
 ~/.dscode/hooks.json       全局 hooks
-~/.dscode/sessions/        会话历史
+~/.dscode/sessions/YYYY/MM/DD/  JSONL 会话正文
+~/.dscode/archived_sessions/   已归档会话
 ```
+
+顶层的 `sessions/*.jsonl` 是为当前终端运行时保留的硬链接兼容入口，与日期目录中的正文指向
+同一个 inode，不会重复占用空间。JSONL 是会话正文的唯一事实来源；SQLite 只保存可搜索的
+会话元数据、置顶/归档状态和文件指纹。
+
+可以在 `~/.dscode/config.json` 中配置凭证与历史记录策略：
+
+```json
+{
+  "cli_auth_credentials_store": "auto",
+  "history": { "persistence": "save-all" }
+}
+```
+
+凭证模式支持 `auto`、`keyring`、`file`。把历史策略设为 `none` 后，新会话不会写入正文。
+`DSCODE_SQLITE_HOME` 可单独迁移 SQLite 状态目录。
 
 可用 `DSCODE_HOME` 修改整个目录，用 `DSCODE_SESSIONS_DIR` 单独修改会话目录。DSCode 不再继承
 `PI_CODING_AGENT_DIR`。首次启动会把旧的 `~/.dscode/agent` 内容无损复制到新目录，不删除、

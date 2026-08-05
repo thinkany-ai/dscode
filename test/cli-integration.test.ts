@@ -80,8 +80,9 @@ describe("DSCode Pi integration", () => {
     });
     const address = await listen(server);
     const execution = await spawnCapture(
-      path.resolve("node_modules/.bin/tsx"),
+      process.execPath,
       [
+        path.resolve("node_modules/tsx/dist/cli.mjs"),
         "src/cli.ts",
         "--base-url",
         `http://127.0.0.1:${address.port}`,
@@ -123,8 +124,9 @@ describe("DSCode Pi integration", () => {
     });
     const address = await listen(server);
     const execution = await spawnCapture(
-      path.resolve("node_modules/.bin/tsx"),
+      process.execPath,
       [
+        path.resolve("node_modules/tsx/dist/cli.mjs"),
         "src/cli.ts",
         "--base-url",
         `http://127.0.0.1:${address.port}`,

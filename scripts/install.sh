@@ -22,7 +22,6 @@ NODE_MIN="22.19.0"
 
 # --- helpers ---------------------------------------------------------------
 info() { printf '\033[1;34m[dscode]\033[0m %s\n' "$*"; }
-ok()    { printf '\033[1;32m[dscode]\033[0m %s\n' "$*"; }
 warn()  { printf '\033[1;33m[dscode]\033[0m %s\n' "$*"; }
 die()   { printf '\033[1;31m[dscode]\033[0m %s\n' "$*" >&2; exit 1; }
 
@@ -144,23 +143,6 @@ case ":$PATH:" in
     ;;
 esac
 
-# --- verify ----------------------------------------------------------------
-if need dscode; then
-  ok "installed: $(dscode --version 2>/dev/null || echo 'dscode ready')"
-else
-  ok "installed. Start a new shell so 'dscode' is on PATH."
-fi
-
-cat <<EOF
-
-  DSCode installed.
-  -----------------
-  Next steps:
-    export DEEPSEEK_API_KEY="sk-..."
-    dscode -C /path/to/project
-
-  Source:      $INSTALL_DIR
-  Launcher:    $BIN_DIR/dscode
-  Runtime:     ~/.dscode   (sessions, config — left untouched)
-  Uninstall:   rm -rf "$INSTALL_DIR" "$BIN_DIR/dscode"
-EOF
+# --- finish ----------------------------------------------------------------
+VERSION=$(node -p "require('./package.json').version")
+node scripts/install-message.mjs "$VERSION"

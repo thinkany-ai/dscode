@@ -55,7 +55,10 @@ describe("DSCode hooks", () => {
         signal: undefined,
         isProjectTrusted: () => true,
       } as unknown as ExtensionContext;
-      registerHooks(pi, () => ({ sandbox: "workspace-write", network: false }));
+      registerHooks(pi, () => ({
+        sandbox: process.platform === "win32" ? "danger-full-access" : "workspace-write",
+        network: false,
+      }));
 
       await handlers.get("session_start")![0]!({ type: "session_start" }, ctx);
       await expect(fs.readFile(path.join(root, "hook.txt"), "utf8")).resolves.toBe("unset");

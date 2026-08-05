@@ -30,5 +30,12 @@ Configuration and sessions use the same `~/.dscode` home as the terminal client.
 use the exported credential and settings functions to build their own login interface without
 showing a terminal prompt.
 
+Storage follows the same split used by the Codex desktop architecture: JSONL transcripts remain
+the durable source of truth, while `state.sqlite` indexes thread metadata and pin/archive state.
+Transcripts are date-partitioned under `sessions/YYYY/MM/DD`; flat hard links preserve compatibility
+with the current terminal resume implementation. Credentials use an injectable `CredentialStore`
+with `auto`, `keyring`, and owner-only `file` modes. The default `auto` mode uses the OS keyring in
+desktop/interactive processes and falls back safely for headless processes.
+
 For graphical authentication, use `saveProviderApiKey()` for API-key providers or pass UI callbacks
 to `authenticateProvider()` for provider OAuth and API-key flows. No terminal rendering is required.

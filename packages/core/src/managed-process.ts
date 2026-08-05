@@ -176,6 +176,19 @@ function signalProcessTree(
   child: ChildProcessWithoutNullStreams,
   signal: NodeJS.Signals,
 ): void {
+  if (process.platform === "win32" && child.pid !== undefined) {
+    const killer = spawn("taskkill.exe", ["/pid", String(child.pid), "/t", "/f"], {
+      stdio: "ignore",
+      windowsHide: true,
+    });
+    killer.once("error", () => child.kill(signal));
+    killer.once("close", (exitCode) => {
+      if (exitCode !== 0 && child.exitCode === null && child.signalCode === null) {
+        child.kill(signal);
+      }
+    });
+    return;
+  }
   if (process.platform !== "win32" && child.pid !== undefined) {
     try {
       process.kill(-child.pid, signal);

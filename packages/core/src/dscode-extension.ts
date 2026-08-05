@@ -27,6 +27,7 @@ import { registerDiagnosticsTool } from "./diagnostics.js";
 import { registerNaturalExit } from "./exit.js";
 import { registerHooks } from "./hooks.js";
 import { registerLocalImageInput } from "./image-input.js";
+import { partitionSessionFile } from "./home.js";
 import { ManagedProcessRegistry, type ManagedProcessResult } from "./managed-process.js";
 import { MCPManager } from "./mcp.js";
 import { applyWorkspacePatch, type ApplyPatchResult } from "./patch.js";
@@ -135,10 +136,23 @@ export function createDSCodeExtension(options: DSCodeRuntimeOptions): InlineExte
       let toolsBeforePlan: string[] | undefined;
       let projectCommands: string[] = [];
       let lastAgentFailed = false;
+      let sessionPartition = Promise.resolve();
       let planState: PlanState | undefined;
       let lastOfferedPlanRevision = 0;
       const access = new SessionAccessController(options.sandbox, options.network);
       const effectiveAccess = (): EffectiveAccess => access.effective(permission);
+
+      const queueSessionPartition = (ctx: ExtensionContext): Promise<void> => {
+        const sessionFile = ctx.sessionManager.getSessionFile();
+        if (!sessionFile) return sessionPartition;
+        sessionPartition = sessionPartition
+          .catch(() => undefined)
+          .then(async () => {
+            await partitionSessionFile(sessionFile);
+          })
+          .catch(() => undefined);
+        return sessionPartition;
+      };
 
       const updateStatus = (ctx: ExtensionContext): void => {
         const currentAccess = effectiveAccess();
@@ -242,9 +256,19 @@ export function createDSCodeExtension(options: DSCodeRuntimeOptions): InlineExte
         pi.setActiveTools(intendedTools);
         toolsBeforePlan = undefined;
         applyPermissionTools();
+        await queueSessionPartition(ctx);
       });
 
-      pi.on("session_shutdown", async () => {
+      pi.on("session_info_changed", async (_event, ctx) => {
+        await queueSessionPartition(ctx);
+      });
+
+      pi.on("agent_settled", async (_event, ctx) => {
+        await queueSessionPartition(ctx);
+      });
+
+      pi.on("session_shutdown", async (_event, ctx) => {
+        await queueSessionPartition(ctx);
         processes.dispose();
         await mcp.close();
       });
