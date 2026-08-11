@@ -26,7 +26,10 @@ conversation state. Workspace IDs map to server-controlled paths, so clients nev
 answer `confirm` / `select` / `input` / `editor` requests as they arrive.
 
 Sessions are persisted to the per-home session store shared with the CLI (`~/.dscode/sessions`) and
-can be resumed by ID.
+can be resumed by ID. Session files are append-only logs and are never rewritten by default.
+Opt in to pruning with `createHttpAdapterServer({ maxSessionFileBytes })`: once a file exceeds the
+limit, it is rewritten down to its active context at turn end — compacted-out history and dead
+branches are dropped, the live conversation is unchanged.
 
 ## Runtime arguments
 
@@ -36,12 +39,14 @@ session — values: `--provider --base-url --transport --harness --permission --
 with `Unsupported direct session argument`. The agent's working directory is always the workspace
 path, never client-controlled.
 
+Pass `logger: true` (or pino options) to emit structured logs; logging is disabled by default.
+
 ## Security notes
 
 - No built-in authentication. Bind to localhost or a private network and add your own auth.
 - Workspace IDs must resolve to server-controlled paths; never derive `cwd` from client input.
 - Credentials and the API key live server-side in the shared `~/.dscode` home.
-- One active turn per session is enforced; sessions are isolated (separate conversation state, tools,
-  MCP connections, and managed processes).
+- One active turn per session and one active session per workspace are enforced; sessions are
+  isolated (separate conversation state, tools, MCP connections, and managed processes).
 
 See `docs/API.md` for the endpoint reference and an end-to-end orchestration walkthrough.

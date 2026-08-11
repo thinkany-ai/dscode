@@ -85,6 +85,7 @@ export interface HttpUiBroker {
   publishExtensionError(error: ExtensionError): void;
   subscribe(listener: HttpUiBrokerListener): () => void;
   respond(response: HttpUiResponse): void;
+  cancelPending(): void;
   dispose(): void;
 }
 
@@ -416,6 +417,11 @@ export function createHttpUiBroker(): HttpUiBroker {
           { cause: error },
         );
       }
+    },
+    cancelPending() {
+      // Resolve blocked dialogs with their fallbacks so an aborted run can settle.
+      for (const entry of [...pending.values()]) entry.cancel();
+      pending.clear();
     },
     dispose() {
       if (disposed) return;

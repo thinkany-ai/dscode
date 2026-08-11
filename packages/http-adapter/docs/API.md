@@ -85,8 +85,10 @@ Rules that shape this loop:
 | Method | Path | Description | Success |
 | --- | --- | --- | --- |
 | `GET` | `/health` | Liveness | `200` `{ "status": "ok" }` |
+| `GET` | `/v1/sessions` | Most recent session per workspace | `200` `{ "sessions": [...] }` |
 | `POST` | `/v1/sessions` | Create or resume a session | `201` descriptor |
 | `GET` | `/v1/sessions/:sessionId` | Session status | `200` descriptor |
+| `GET` | `/v1/sessions/:sessionId/messages` | Conversation history of an active session | `200` `{ "messages": [...] }` |
 | `DELETE` | `/v1/sessions/:sessionId` | Abort, close streams, dispose agent | `204` |
 | `GET` | `/v1/sessions/:sessionId/events` | SSE event stream | `200` `text/event-stream` |
 | `POST` | `/v1/sessions/:sessionId/turns` | Start a turn | `202` `{ id, status }` |
@@ -94,6 +96,23 @@ Rules that shape this loop:
 | `POST` | `/v1/sessions/:sessionId/ui-requests/:requestId/responses` | Answer a UI request | `204` |
 
 ### Sessions
+
+`GET /v1/sessions` — one entry per configured workspace, in configuration order:
+
+```json
+{
+  "sessions": [
+    { "workspaceId": "main", "active": true, "session": { "id": "…", "workspaceId": "main", "persisted": true, "status": "idle" } },
+    { "workspaceId": "other", "active": false, "session": { "id": "…", "name": "…", "firstMessage": "…", "messageCount": 12, "modified": "2026-08-04T12:00:00.000Z" } }
+  ]
+}
+```
+
+- Active workspaces carry the live session descriptor (`status`: `idle` / `running` /
+  `aborting`); a session still disposing counts as active.
+- Inactive workspaces carry the most recently modified persisted session — the resume
+  target for `POST /v1/sessions { resumeSessionId }` — with `name` omitted when unset,
+  or `session: null` when the workspace has no history yet.
 
 `POST /v1/sessions` — body:
 
@@ -106,6 +125,8 @@ Rules that shape this loop:
 - `resumeSessionId` (optional): resumes the persisted session with that ID — the new session takes
   that ID (`resumed: true`). Returns `404 persistent_session_not_found` when absent, or
   `409 session_already_active` when already active.
+- At most one active session per workspace: creating or resuming while the workspace has an active
+  session returns `409 workspace_session_active`.
 
 `201` response and the descriptor returned by `GET /v1/sessions/:sessionId`:
 
@@ -115,11 +136,43 @@ Rules that shape this loop:
 
 `status` is `idle`, `running`, or `aborting`. Sessions are always persisted on disk.
 
+Session files are append-only logs and are never rewritten unless the server is created with
+`maxSessionFileBytes` (opt-in). When set, a file that exceeds the limit is pruned at turn end:
+compacted-out history and dead branches are dropped, leaving exactly the active context — the
+live conversation is unaffected.
+
+### Messages
+
+`GET /v1/sessions/:sessionId/messages` returns the active session's conversation
+history:
+
+```json
+{
+  "messages": [
+    { "role": "user", "timestamp": 1770206400000, "content": [{ "type": "text", "text": "Fix the login form" }] },
+    { "role": "assistant", "timestamp": 1770206401000, "content": [{ "type": "text", "text": "On it." }, { "type": "toolCall", "id": "…", "name": "read", "arguments": { "path": "login.ts" } }] },
+    { "role": "toolResult", "timestamp": 1770206402000, "toolCallId": "…", "toolName": "read", "isError": false, "content": [{ "type": "text", "text": "…" }] },
+    { "role": "compactionSummary", "timestamp": 1770206403000, "summary": "…" }
+  ]
+}
+```
+
+- Active sessions only — an inactive or unknown session returns
+  `404 session_not_found`; resume it first, then fetch its messages.
+- The transcript is the session's current context view: after compaction it starts with
+  a `compactionSummary` followed by the retained tail.
+- Thinking and image content are omitted. While a turn is running, the snapshot may
+  include the in-progress assistant message.
+
 ### Turns
 
 ```json
-{ "message": "Add validation to the login form" }
+{ "message": "Add validation to the login form", "clientId": "8c1fa2c4-…" }
 ```
+
+- `message` (required): the user prompt to run.
+- `clientId` (optional): opaque caller identifier, echoed in the `running` event — clients
+  use it to suppress their own echo of the submitted message.
 
 `202` acknowledges with `{ "id": "<turnId>", "status": "running" }`. The investigation happens
 concurrently; the outcome is delivered only as the terminal `turn` event on the stream.
@@ -141,8 +194,12 @@ Event types:
 
 | type | fields | meaning |
 | --- | --- | --- |
-| `turn` | `turnId`, `status`, `output?` | Lifecycle: `running` / `aborting`, terminal `completed` (with `output` = last assistant text), `failed`, `aborted` |
+| `turn` | `turnId`, `status`, `output?`, `error?`, `message?`, `clientId?` | Lifecycle: `running` (with `message` = submitted text and `clientId` = submitter's id, when provided) / `aborting`, terminal `completed` (with `output` = last assistant text), `failed` (with `error` = failure reason), `aborted` |
 | `assistant_text_delta` | `turnId`, `delta` | Incremental assistant output |
+| `thinking_start` | `turnId` | Model began thinking (thinking content is not streamed) |
+| `thinking_end` | `turnId` | Model finished thinking |
+| `compaction_start` | `turnId` | Context summarization began |
+| `compaction_end` | `turnId` | Context summarization finished |
 | `tool` | `turnId`, `phase`, `toolCallId`, `name`, `args`, plus `partialResult` on `updated`, or `result`/`isError` on `completed` | Tool call lifecycle (`started` / `updated` / `completed`) |
 | `ui_request` | `turnId`, `request` | Interactive dialog to answer |
 | `ui_event` | `turnId`, `event` | Extension UI state: `status`, `widget`, `title`, `working_*`, `hidden_thinking_label`, `notify`, `editor_text` |
@@ -150,6 +207,13 @@ Event types:
 
 `turnId` is `null` for events emitted outside an active turn (for example UI updates at session
 startup).
+
+`thinking_start`/`thinking_end` and `compaction_start`/`compaction_end` are activity indicators:
+show a progress state between the pair and clear it on any terminal `turn` event — an aborted turn
+may never emit the matching `_end`. They are not replayed on reconnect.
+
+The server writes a `: keepalive` comment frame roughly every 30 seconds. Compliant SSE clients
+ignore comments; use their absence for staleness detection if needed.
 
 ## UI requests and responses
 
@@ -191,7 +255,9 @@ A mismatched body is rejected with `400 invalid_ui_response`; `confirm` cannot t
 | `404` | `ui_request_not_found` | Unknown `requestId` (or requested against the wrong session) |
 | `404` | `turn_not_found` | Abort of an unknown or already-finished turn |
 | `409` | `session_already_active` | Create/resume while the ID is active, activating, or disposing |
+| `409` | `workspace_session_active` | Create/resume while the workspace already has an active session |
 | `409` | `session_already_exists` | Persisted session with that ID already exists |
 | `409` | `turn_in_progress` | Turn submitted while one is running |
 | `500` | `session_creation_failed` / `session_disposal_failed` / `turn_abort_failed` / `ui_response_failed` | Internal failure |
+| `500` | `session_list_failed` | Persisted session store scan failed on `GET /v1/sessions` |
 

@@ -1,3 +1,4 @@
+import { statSync } from "node:fs";
 import path from "node:path";
 import {
   type AgentSession,
@@ -18,6 +19,7 @@ import {
   initializeDSCodeHome,
   parseRuntimeArgs,
 } from "@thinkany/dscode-core";
+import { pruneSessionFile } from "./session-pruner.js";
 import {
   createHttpUiBroker,
   type HttpUiBroker,
@@ -54,6 +56,7 @@ export interface CreateAgentSessionHostOptions {
   runtimeArgs?: readonly string[];
   uiBroker?: HttpUiBroker;
   session?: AgentSessionStorage;
+  maxSessionFileBytes?: number;
 }
 
 export interface AgentSessionHost {
@@ -63,6 +66,7 @@ export interface AgentSessionHost {
   prompt(message: string): Promise<void>;
   abort(): Promise<void>;
   waitForIdle(): Promise<void>;
+  prunePersistedSession(): boolean;
   subscribe(listener: HttpUiBrokerListener): () => void;
   dispose(): Promise<void>;
 }
@@ -143,7 +147,7 @@ export async function createAgentSessionHost(
         uiBroker.publishExtensionError(error);
       },
     });
-    return createHost(runtime, uiBroker, unsubscribe);
+    return createHost(runtime, uiBroker, unsubscribe, options.maxSessionFileBytes);
   } catch (error) {
     unsubscribe?.();
     uiBroker.dispose();
@@ -156,6 +160,7 @@ function createHost(
   runtime: AgentSessionRuntime,
   uiBroker: HttpUiBroker,
   unsubscribe: () => void,
+  maxSessionFileBytes: number | undefined,
 ): AgentSessionHost {
   let disposePromise: Promise<void> | undefined;
   let disposalStarted = false;
@@ -180,11 +185,27 @@ function createHost(
     },
     async abort() {
       assertActive();
+      uiBroker.cancelPending();
       await runtime.session.abort();
     },
     async waitForIdle() {
       assertActive();
       await runtime.session.waitForIdle();
+    },
+    prunePersistedSession() {
+      assertActive();
+      if (maxSessionFileBytes === undefined) return false;
+      const manager = runtime.session.sessionManager;
+      const sessionFile = manager.getSessionFile();
+      if (!sessionFile) return false;
+      let size: number;
+      try {
+        size = statSync(sessionFile).size;
+      } catch {
+        return false;
+      }
+      if (size <= maxSessionFileBytes) return false;
+      return pruneSessionFile(manager);
     },
     subscribe(listener) {
       assertActive();
@@ -258,6 +279,26 @@ async function createSessionManager(
     throw new Error(`Multiple persisted sessions found with ID: ${storage.id}`);
   }
   return SessionManager.open(matches[0]!.path, sessionDir, cwd);
+}
+
+export interface PersistedSessionSummary {
+  id: string;
+  name?: string;
+  firstMessage: string;
+  messageCount: number;
+  modified: Date;
+}
+
+/** List persisted sessions for a workspace, most recently modified first. */
+export async function listPersistedSessions(cwd: string): Promise<PersistedSessionSummary[]> {
+  const infos = await SessionManager.list(cwd, getDSCodeSessionsDir());
+  return infos.map((info) => ({
+    id: info.id,
+    ...(info.name !== undefined ? { name: info.name } : {}),
+    firstMessage: info.firstMessage,
+    messageCount: info.messageCount,
+    modified: info.modified,
+  }));
 }
 
 let themeInitialized = false;
