@@ -251,6 +251,7 @@ Provider API key 不会传给命令、hooks 或 stdio MCP server。
 - 可重连后台命令
 - 面向 CI 的 JSONL，以及完整 stdin/stdout RPC 模式
 - 可复用的 `@thinkany/dscode-core` 包及其内置 headless RPC worker
+- [apps/desktop](apps/desktop/README.md) 中的原生 Electron 桌面客户端
 - [editors/vscode](editors/vscode/README.md) 中的 VS Code 扩展
 - `safe` harness 自动发现 TypeScript、Pyright、Rust、Go 和 Swift diagnostics
 
@@ -284,6 +285,7 @@ pnpm dev -C /path/to/project
 
 ```bash
 pnpm check             # 类型检查、测试和生产构建
+pnpm desktop:check     # 桌面端类型检查、测试和生产构建
 pnpm smoke:live        # 使用真实 DeepSeek API 的修改与测试 smoke flow
 pnpm acceptance:live   # 完整真实 API 功能验收
 ```

@@ -1,0 +1,212 @@
+name: Desktop
+
+on:
+  pull_request:
+    branches: [dev, main]
+    paths:
+      - "apps/desktop/**"
+      - "packages/core/**"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
+      - ".github/workflows/desktop.yml"
+  push:
+    branches: [dev, main]
+    tags:
+      - "desktop-v*"
+    paths:
+      - "apps/desktop/**"
+      - "packages/core/**"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
+      - ".github/workflows/desktop.yml"
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: Platform to build
+        required: true
+        default: all
+        type: choice
+        options:
+          - all
+          - macos
+          - windows
+          - linux
+      release:
+        description: Create a draft release after building all platforms
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/desktop-v') }}
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos
+            os: macos-latest
+            args: --mac --arm64 --x64
+            name: macos
+          - platform: windows
+            os: windows-latest
+            args: --win --x64
+            name: windows-x86_64
+          - platform: linux
+            os: ubuntu-22.04
+            args: --linux --x64
+            name: linux-x86_64
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Resolve build mode
+        id: mode
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" && "${{ inputs.release }}" == "true" && "${{ inputs.platform }}" != "all" ]]; then
+            echo "A draft release must include all platforms; choose platform=all." >&2
+            exit 1
+          fi
+
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" && "${{ inputs.platform }}" != "all" && "${{ inputs.platform }}" != "${{ matrix.platform }}" ]]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+          if [[ "$GITHUB_REF" == refs/tags/desktop-v* || ("${{ github.event_name }}" == "workflow_dispatch" && "${{ inputs.release }}" == "true") ]]; then
+            echo "release=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "release=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Check out repository
+        if: steps.mode.outputs.skip != 'true'
+        uses: actions/checkout@v6
+
+      - name: Install Linux packaging and smoke-test dependencies
+        if: steps.mode.outputs.skip != 'true' && matrix.platform == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y rpm xvfb
+
+      - name: Set up pnpm
+        if: steps.mode.outputs.skip != 'true'
+        uses: pnpm/action-setup@v6
+        with:
+          version: 10.12.2
+          run_install: false
+
+      - name: Set up Node.js
+        if: steps.mode.outputs.skip != 'true'
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        if: steps.mode.outputs.skip != 'true'
+        run: pnpm install --frozen-lockfile
+
+      - name: Check application
+        if: steps.mode.outputs.skip != 'true'
+        run: pnpm desktop:check
+
+      - name: Build signed and notarized macOS artifacts
+        if: steps.mode.outputs.skip != 'true' && matrix.platform == 'macos' && steps.mode.outputs.release == 'true'
+        env:
+          CSC_LINK: ${{ secrets.APPLE_CERTIFICATE }}
+          CSC_KEY_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: pnpm --dir apps/desktop exec electron-builder ${{ matrix.args }} --publish never
+
+      - name: Build unsigned macOS verification artifacts
+        if: steps.mode.outputs.skip != 'true' && matrix.platform == 'macos' && steps.mode.outputs.release != 'true'
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+        run: pnpm --dir apps/desktop exec electron-builder ${{ matrix.args }} --publish never --config.mac.notarize=false
+
+      - name: Build Windows or Linux artifacts
+        if: steps.mode.outputs.skip != 'true' && matrix.platform != 'macos'
+        run: pnpm --dir apps/desktop exec electron-builder ${{ matrix.args }} --publish never
+
+      - name: Smoke test packaged app
+        if: steps.mode.outputs.skip != 'true' && matrix.platform != 'linux'
+        run: pnpm --dir apps/desktop smoke:packaged
+
+      - name: Smoke test packaged app on Linux
+        if: steps.mode.outputs.skip != 'true' && matrix.platform == 'linux'
+        run: xvfb-run -a pnpm --dir apps/desktop smoke:packaged
+
+      - name: Upload artifacts
+        if: steps.mode.outputs.skip != 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: DSCode-${{ matrix.name }}
+          path: |
+            apps/desktop/release/*.dmg
+            apps/desktop/release/*.zip
+            apps/desktop/release/*.exe
+            apps/desktop/release/*.deb
+            apps/desktop/release/*.rpm
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/desktop-v') || (github.event_name == 'workflow_dispatch' && inputs.release == true)
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v7
+        with:
+          path: artifacts
+
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          path: repo
+          fetch-depth: 0
+
+      - name: Resolve and validate release version
+        id: version
+        shell: bash
+        run: |
+          git -C repo fetch origin main
+          git -C repo merge-base --is-ancestor "$GITHUB_SHA" origin/main
+          VERSION=$(node -p "require('./repo/apps/desktop/package.json').version")
+          TAG="desktop-v$VERSION"
+          if [[ "$GITHUB_REF" == refs/tags/desktop-v* && "$GITHUB_REF_NAME" != "$TAG" ]]; then
+            echo "Tag $GITHUB_REF_NAME does not match Desktop package version $VERSION." >&2
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Collect release files
+        shell: bash
+        run: |
+          mkdir -p release-files
+          find artifacts -type f \( -name "*.dmg" -o -name "*.zip" -o -name "*.exe" -o -name "*.deb" -o -name "*.rpm" \) -exec cp {} release-files/ \;
+          test -n "$(find release-files -type f -print -quit)"
+          ls -la release-files
+
+      - name: Create draft release
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          generate_release_notes: true
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: DSCode Desktop v${{ steps.version.outputs.version }}
+          files: release-files/*

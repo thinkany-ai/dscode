@@ -1,0 +1,199 @@
+/* Tetris — dark arcade theme, shared by the standalone page and the in-app overlay. */
+.tetris-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: grid;
+  place-items: center;
+  background: radial-gradient(1200px 800px at 50% 0%, #16202e 0%, #0b0f16 55%, #07090d 100%);
+  overflow: auto;
+}
+
+.tetris-screen {
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  padding: 24px;
+  color: #e8ecf2;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
+}
+
+html:has(.tetris-screen) {
+  background: #0b0f16;
+}
+
+.tetris-wrap {
+  display: flex;
+  gap: 16px;
+  align-items: stretch;
+}
+
+.tetris-panel {
+  width: 168px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.tetris-card {
+  background: rgba(255, 255, 255, 0.055);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 12px;
+  padding: 10px 12px;
+}
+
+.tetris-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  color: #8b98a9;
+  margin-bottom: 6px;
+}
+
+.tetris-label kbd {
+  margin-left: 0;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 4px;
+  padding: 1px 5px;
+  font-size: 10px;
+  color: #aab6c4;
+}
+
+.tetris-value {
+  font-size: 20px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: #f2f5f9;
+}
+
+.tetris-mini {
+  display: block;
+  width: 100%;
+  background: rgba(0, 0, 0, 0.28);
+  border-radius: 8px;
+}
+
+.tetris-mini-next {
+  height: auto;
+}
+
+.tetris-board-wrap {
+  position: relative;
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.08);
+}
+
+.tetris-canvas {
+  display: block;
+}
+
+.tetris-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  background: rgba(7, 9, 13, 0.82);
+  backdrop-filter: blur(3px);
+  text-align: center;
+  padding: 20px;
+}
+
+.tetris-overlay strong {
+  font-size: 26px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  color: #f2f5f9;
+}
+
+.tetris-overlay span {
+  font-size: 13px;
+  color: #9aa7b6;
+}
+
+.tetris-overlay button,
+.tetris-action {
+  margin-top: 8px;
+  padding: 8px 18px;
+  border-radius: 8px;
+  background: #3b82f6;
+  color: #ffffff;
+  font-weight: 650;
+  font-size: 13px;
+  border: 0;
+  cursor: pointer;
+}
+
+.tetris-overlay button:hover,
+.tetris-action:hover {
+  background: #2f6fe0;
+}
+
+.tetris-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.tetris-actions .tetris-action {
+  width: 100%;
+  margin-top: 0;
+  background: rgba(255, 255, 255, 0.07);
+  color: #c9d2dc;
+}
+
+.tetris-actions .tetris-action:hover {
+  background: rgba(255, 255, 255, 0.13);
+  color: #ffffff;
+}
+
+.tetris-controls {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.tetris-controls button {
+  min-width: 52px;
+  padding: 9px 12px;
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: #e6ebf1;
+  font-size: 15px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.tetris-controls button:hover {
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.tetris-controls button:active {
+  transform: translateY(1px);
+}
+
+.tetris-hint {
+  font-size: 11.5px;
+  color: #7d8a9a;
+  text-align: center;
+}
+
+.tetris-hint kbd {
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 4px;
+  padding: 1px 5px;
+  color: #aab6c4;
+  margin: 0 2px;
+}

@@ -1,0 +1,61 @@
+appId: ai.thinkany.dscode.desktop
+productName: DSCode
+copyright: Copyright © 2026 ThinkAny
+
+directories:
+  output: release
+  buildResources: build
+
+files:
+  - dist/**/*
+  - dist-electron/**/*
+  - LICENSE
+  - package.json
+  - "!node_modules/@thinkany/dscode-core/src/**/*"
+  - "!node_modules/@thinkany/dscode-core/tsconfig.json"
+  - "!**/*.map"
+
+# The agent runtime is launched through Electron's executable in Node mode. Keep
+# its JavaScript and native dependencies on real filesystem paths.
+asar: false
+
+mac:
+  category: public.app-category.developer-tools
+  icon: build/icon.icns
+  target:
+    - target: dmg
+      arch: [arm64, x64]
+    - target: zip
+      arch: [arm64, x64]
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.plist
+  notarize: true
+  artifactName: "${productName}_${version}_${arch}.${ext}"
+
+dmg:
+  sign: false
+
+win:
+  icon: build/icon.ico
+  target:
+    - target: nsis
+      arch: [x64]
+  artifactName: "${productName}_${version}_${arch}-setup.${ext}"
+
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+
+linux:
+  icon: build/icon.png
+  category: Development
+  target:
+    - target: deb
+      arch: [x64]
+    - target: rpm
+      arch: [x64]
+  artifactName: "${productName}_${version}_${arch}.${ext}"
+
+publish: null

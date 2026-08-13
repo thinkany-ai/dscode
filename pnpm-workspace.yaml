@@ -1,7 +1,20 @@
 packages:
+  - apps/*
   - packages/*
 
 onlyBuiltDependencies:
   - '@google/genai'
+  - electron
   - esbuild
   - protobufjs
+
+# Desktop releases build both macOS architectures from one runner. Install
+# native optional packages for both CPUs on the current CI operating system.
+supportedArchitectures:
+  os:
+    - current
+  cpu:
+    - x64
+    - arm64
+  libc:
+    - current

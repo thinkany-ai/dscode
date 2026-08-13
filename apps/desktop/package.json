@@ -1,0 +1,63 @@
+{
+  "name": "@thinkany/dscode-desktop",
+  "productName": "DSCode",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Native-feeling desktop client for DSCode",
+  "author": "ThinkAny",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/thinkany-ai/dscode.git",
+    "directory": "apps/desktop"
+  },
+  "type": "module",
+  "main": "dist-electron/main/index.mjs",
+  "scripts": {
+    "build:core": "pnpm --dir ../../packages/core build",
+    "predev": "pnpm build:core",
+    "dev": "concurrently -k \"vite --host 127.0.0.1\" \"wait-on tcp:5173 && cross-env VITE_DEV_SERVER_URL=http://127.0.0.1:5173 electron .\"",
+    "prebuild": "pnpm build:core",
+    "build:electron": "tsup",
+    "build:renderer": "vite build",
+    "build": "pnpm build:electron && pnpm build:renderer",
+    "pretypecheck": "pnpm build:core",
+    "typecheck": "tsc --noEmit",
+    "pretest": "pnpm build:core",
+    "test": "vitest run",
+    "check": "pnpm typecheck && pnpm test && pnpm build",
+    "pack": "pnpm build && cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --dir --config.mac.notarize=false",
+    "dist": "pnpm build && electron-builder",
+    "dist:mac": "pnpm build && electron-builder --mac",
+    "dist:win": "pnpm build && electron-builder --win",
+    "dist:linux": "pnpm build && electron-builder --linux",
+    "smoke:packaged": "node scripts/smoke-packaged.mjs",
+    "start": "electron ."
+  },
+  "dependencies": {
+    "@thinkany/dscode-core": "workspace:*",
+    "lucide-react": "^0.468.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "react-markdown": "^9.0.1",
+    "remark-gfm": "^4.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^4.3.4",
+    "concurrently": "^9.1.2",
+    "cross-env": "^7.0.3",
+    "electron": "^37.2.6",
+    "electron-builder": "^26.0.12",
+    "tsup": "^8.3.5",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.5",
+    "vitest": "^3.2.4",
+    "wait-on": "^8.0.1"
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  }
+}

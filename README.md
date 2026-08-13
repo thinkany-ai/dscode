@@ -264,6 +264,7 @@ server environments.
 - Reconnectable background commands
 - JSONL output for CI and a full stdin/stdout RPC mode
 - Reusable `@thinkany/dscode-core` package with a bundled headless RPC worker
+- Native Electron desktop client in [apps/desktop](apps/desktop/README.md)
 - VS Code extension in [editors/vscode](editors/vscode/README.md)
 - Automatic TypeScript, Pyright, Rust, Go, and Swift diagnostics with the `safe` harness
 
@@ -298,6 +299,7 @@ Useful validation commands:
 
 ```bash
 pnpm check             # typecheck, tests, and production build
+pnpm desktop:check     # desktop typecheck, tests, and production build
 pnpm smoke:live        # real DeepSeek edit-and-test smoke flow
 pnpm acceptance:live   # complete real-API feature acceptance
 ```
