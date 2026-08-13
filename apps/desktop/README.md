@@ -44,16 +44,21 @@ pnpm --dir apps/desktop dist:win          # NSIS installer, x64
 pnpm --dir apps/desktop dist:linux        # DEB + RPM, x64
 ```
 
-Release artifacts are written to `release/`. macOS distribution builds use the same signing and
-notarization environment contract as WorkAny: `APPLE_CERTIFICATE`,
-`APPLE_CERTIFICATE_PASSWORD`, `APPLE_ID`, `APPLE_PASSWORD`, and `APPLE_TEAM_ID`. Windows builds are
-currently unsigned.
+Release artifacts are written to `release/`. As with Termany, tagged macOS distribution builds are
+signed with a Developer ID certificate, notarized by Apple, and stapled before release. The workflow
+uses `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`, `APPLE_ID`,
+`APPLE_PASSWORD`, and `APPLE_TEAM_ID` repository secrets. Windows and Linux builds are currently
+unsigned.
 
 The desktop GitHub Actions workflow validates all three operating systems when Desktop or Core
 changes. Pushing a tag matching `desktop-v<version>` (for example, `desktop-v0.1.0`) builds every
 platform and creates a draft GitHub Release. The workflow can also be run manually for one platform,
 or for all platforms with draft release creation enabled. Desktop versions and tags remain independent
 from the CLI and Core release line.
+
+Download published installers from [DSCode Releases](https://github.com/thinkany-ai/dscode/releases).
+Choose the DMG matching your Mac (`arm64` for Apple Silicon or `x64` for Intel), the `-setup.exe` for
+Windows, or the DEB/RPM package for Linux.
 
 DSCode credentials, settings, project trust, and sessions remain in `~/.dscode`, shared with the
 terminal client. The Electron main process starts the bundled core RPC entry with Electron's own

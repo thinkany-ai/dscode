@@ -65,7 +65,11 @@ Keep `dev` as the repository default branch.
 The Electron application under `apps/desktop` has an independent version and release line. Desktop
 changes merge through `dev` like the rest of the repository, but they do not require a CLI/Core version
 bump. Push a tag matching `desktop-v<version>` (for example, `desktop-v0.1.0`) from a commit on `main`
-to build the macOS, Windows, and Linux artifacts and create a draft GitHub Release.
+to build the macOS, Windows, and Linux artifacts and create a draft GitHub Release. Tagged macOS
+builds require the same six Apple repository secrets as Termany: `APPLE_CERTIFICATE`,
+`APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`, `APPLE_ID`, `APPLE_PASSWORD`, and
+`APPLE_TEAM_ID`. The workflow signs the application, notarizes it, then notarizes and staples both
+architecture-specific DMGs before uploading them. Windows and Linux packages are currently unsigned.
 
 The Desktop workflow also runs compatibility builds when either `apps/desktop` or `packages/core`
 changes. Keep `apps/desktop/package.json` on `workspace:*` for Core so a single pull request validates
