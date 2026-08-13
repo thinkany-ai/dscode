@@ -10,6 +10,8 @@ export const PROVIDER_IDS = [
   "xai",
 ] as const;
 
+export const AUTH_PROMPT_CANCEL_VALUE = "__dscode_auth_prompt_cancel__";
+
 export type ProviderId = (typeof PROVIDER_IDS)[number];
 export type PermissionMode = "plan" | "ask" | "auto" | "full";
 export type SandboxMode = "read-only" | "workspace-write" | "danger-full-access";
@@ -190,7 +192,7 @@ export interface DesktopApi {
   auth: {
     status(): Promise<ProviderStatus[]>;
     saveApiKey(provider: Exclude<ProviderId, "openai-codex">, key: string, baseUrl?: string): Promise<void>;
-    login(provider: Exclude<ProviderId, "deepseek">): Promise<void>;
+    login(provider: Exclude<ProviderId, "deepseek">): Promise<boolean>;
     respond(id: string, value: string): Promise<void>;
     logout(provider: ProviderId): Promise<void>;
     onEvent(listener: (event: AuthUiEvent) => void): () => void;

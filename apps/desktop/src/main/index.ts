@@ -11,6 +11,7 @@ import {
   Menu,
   net,
   protocol,
+  screen,
   shell,
 } from "electron";
 import {
@@ -38,6 +39,7 @@ import {
   setSessionPinned,
   unarchiveSession,
 } from "./session-index";
+import { AUTH_PROMPT_CANCEL_VALUE } from "../shared/types";
 import type { AgentStartOptions, AuthUiEvent, FilePreview, FilePreviewKind, LanguagePreference, ProviderStatus, UserProfile } from "../shared/types";
 
 let mainWindow: BrowserWindow | undefined;
@@ -46,6 +48,13 @@ let recentWorkspaces: RecentWorkspaces;
 let appSettings: AppSettings;
 let activeAgentCwd: string | undefined;
 const authPrompts = new Map<string, { resolve(value: string): void; reject(error: Error): void }>();
+
+class AuthPromptCancelledError extends Error {
+  constructor() {
+    super("Login prompt cancelled");
+    this.name = "AuthPromptCancelledError";
+  }
+}
 const previewFiles = new Map<string, { filePath: string; rootPath: string }>();
 let activePreviewId: string | undefined;
 const currentDirectory = path.dirname(fileURLToPath(import.meta.url));
@@ -75,9 +84,17 @@ if (userDataOverride) {
 }
 
 function createWindow(): void {
+  const { workArea } = screen.getPrimaryDisplay();
+  const windowWidth = Math.floor(workArea.width * 0.8);
+  const windowHeight = Math.floor(workArea.height * 0.9);
+  const windowX = workArea.x + Math.floor((workArea.width - windowWidth) / 2);
+  const windowY = workArea.y + Math.floor((workArea.height - windowHeight) / 2);
+
   mainWindow = new BrowserWindow({
-    width: 1360,
-    height: 900,
+    width: windowWidth,
+    height: windowHeight,
+    x: windowX,
+    y: windowY,
     minWidth: 900,
     minHeight: 640,
     show: false,
@@ -98,7 +115,10 @@ function createWindow(): void {
     (message) => mainWindow?.webContents.send("agent:error", message),
   );
 
-  mainWindow.once("ready-to-show", () => mainWindow?.show());
+  mainWindow.once("ready-to-show", () => {
+    mainWindow?.setPosition(windowX, windowY);
+    mainWindow?.show();
+  });
   mainWindow.on("closed", () => {
     mainWindow = undefined;
     void agentHost?.stop();
@@ -268,7 +288,9 @@ function registerIpc(): void {
       };
       const result = await authenticateProvider(provider, interaction);
       send({ kind: "complete", providerId: result.providerId, modelId: result.modelId });
+      return true;
     } catch (error) {
+      if (error instanceof AuthPromptCancelledError) return false;
       const message = error instanceof Error ? error.message : String(error);
       send({ kind: "error", message });
       throw error;
@@ -278,7 +300,11 @@ function registerIpc(): void {
     const pending = authPrompts.get(id);
     if (!pending) return;
     authPrompts.delete(id);
-    pending.resolve(value);
+    if (value === AUTH_PROMPT_CANCEL_VALUE) {
+      pending.reject(new AuthPromptCancelledError());
+    } else {
+      pending.resolve(value);
+    }
   });
 
   ipcMain.handle("agent:start", async (_event, options: AgentStartOptions) => {

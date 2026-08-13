@@ -8,6 +8,9 @@ onlyBuiltDependencies:
   - esbuild
   - protobufjs
 
+patchedDependencies:
+  '@earendil-works/pi-ai@0.83.0': patches/@earendil-works__pi-ai@0.83.0.patch
+
 # Desktop releases build both macOS architectures from one runner. Install
 # native optional packages for both CPUs on the current CI operating system.
 supportedArchitectures:
