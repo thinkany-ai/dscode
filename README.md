@@ -22,6 +22,34 @@ transparent usage reporting.
 It is not trying to out-feature every general-purpose agent. It keeps the runtime local and inspectable
 while letting each repository task use the model capabilities it actually needs.
 
+## Terminal app
+
+<p align="center">
+  <img src="docs/assets/dscode-terminal.png" width="1200" alt="DSCode terminal interface">
+</p>
+
+## Desktop app
+
+<p align="center">
+  <img src="docs/assets/dscode-desktop.png" width="1200" alt="DSCode Desktop conversation view">
+</p>
+
+Download **DSCode Desktop v0.1.0** from the
+[release page](https://github.com/thinkany-ai/dscode/releases/tag/desktop-v0.1.0), or use a direct
+installer link:
+
+| Platform | Download |
+| --- | --- |
+| macOS · Apple Silicon | [DMG](https://github.com/thinkany-ai/dscode/releases/download/desktop-v0.1.0/DSCode_0.1.0_arm64.dmg) |
+| macOS · Intel | [DMG](https://github.com/thinkany-ai/dscode/releases/download/desktop-v0.1.0/DSCode_0.1.0_x64.dmg) |
+| Windows · x64 | [Setup EXE](https://github.com/thinkany-ai/dscode/releases/download/desktop-v0.1.0/DSCode_0.1.0_x64-setup.exe) |
+| Debian / Ubuntu · x64 | [DEB](https://github.com/thinkany-ai/dscode/releases/download/desktop-v0.1.0/DSCode_0.1.0_amd64.deb) |
+| Fedora / RHEL · x64 | [RPM](https://github.com/thinkany-ai/dscode/releases/download/desktop-v0.1.0/DSCode_0.1.0_x86_64.rpm) |
+
+The macOS builds are signed with a Developer ID certificate, notarized by Apple, and stapled. Windows
+and Linux builds are currently unsigned. See the [Desktop documentation](apps/desktop/README.md) for
+development and packaging details.
+
 ## Why DSCode
 
 - **DeepSeek-first, not DeepSeek-only.** DeepSeek V4 Flash remains the default, with its dedicated
