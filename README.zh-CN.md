@@ -24,7 +24,7 @@ DSCode 不追求在功能数量上超过所有通用 coding agent；目标是保
 ## 桌面客户端
 
 <p align="center">
-  <img src="assets/dscode-desktop.png" width="1200" alt="DSCode Desktop 会话界面">
+  <img src="docs/assets/dscode-desktop.png" width="1200" alt="DSCode Desktop 会话界面">
 </p>
 
 可从 [DSCode Desktop v0.1.0 发布页](https://github.com/thinkany-ai/dscode/releases/tag/desktop-v0.1.0)

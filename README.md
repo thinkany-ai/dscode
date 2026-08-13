@@ -25,7 +25,7 @@ while letting each repository task use the model capabilities it actually needs.
 ## Desktop app
 
 <p align="center">
-  <img src="assets/dscode-desktop.png" width="1200" alt="DSCode Desktop conversation view">
+  <img src="docs/assets/dscode-desktop.png" width="1200" alt="DSCode Desktop conversation view">
 </p>
 
 Download **DSCode Desktop v0.1.0** from the
