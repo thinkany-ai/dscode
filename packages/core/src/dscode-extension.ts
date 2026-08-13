@@ -758,55 +758,71 @@ export function createDSCodeExtension(options: DSCodeRuntimeOptions): InlineExte
 
 function registerDeepSeekProvider(pi: ExtensionAPI, options: DSCodeRuntimeOptions): void {
   const api = options.transport === "responses" ? "openai-responses" : "openai-completions";
-  const modelId =
-    options.providerId === "deepseek" ? options.modelId : defaultModelForProvider("deepseek");
+  const models = [
+    {
+      id: "deepseek-v4-flash",
+      name: "DeepSeek V4 Flash",
+      cost: { input: 0.14, output: 0.28, cacheRead: 0.0028, cacheWrite: 0 },
+    },
+    {
+      id: "deepseek-v4-pro",
+      name: "DeepSeek V4 Pro",
+      cost: { input: 0.435, output: 0.87, cacheRead: 0.003625, cacheWrite: 0 },
+    },
+  ];
+  if (
+    options.providerId === "deepseek" &&
+    !models.some((model) => model.id === options.modelId)
+  ) {
+    const defaultCost = models.find(
+      (model) => model.id === defaultModelForProvider("deepseek"),
+    )?.cost;
+    models.push({
+      id: options.modelId,
+      name: options.modelId,
+      cost: defaultCost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    });
+  }
   pi.registerProvider("deepseek", {
     name: "DeepSeek",
     baseUrl: options.baseUrl,
     apiKey: "$DEEPSEEK_API_KEY",
     api,
     authHeader: true,
-    models: [
-      {
-        id: modelId,
-        name: modelId === "deepseek-v4-flash" ? "DeepSeek V4 Flash" : modelId,
-        api,
-        reasoning: true,
-        input: ["text"],
-        cost: {
-          input: 0.14,
-          output: 0.28,
-          cacheRead: 0.0028,
-          cacheWrite: 0,
-        },
-        contextWindow: 1_048_576,
-        maxTokens: 384_000,
-        thinkingLevelMap: {
-          off: null,
-          minimal: null,
-          low: "low",
-          medium: "high",
-          high: "high",
-          xhigh: "high",
-          max: "max",
-        },
-        compat:
-          options.transport === "responses"
-            ? {
-                supportsDeveloperRole: true,
-                supportsLongCacheRetention: false,
-                supportsStrictMode: false,
-                supportsOpenAIGrammarTools: true,
-                sessionAffinityFormat: "openai-nosession",
-              }
-            : {
-                supportsStore: false,
-                supportsDeveloperRole: false,
-                requiresReasoningContentOnAssistantMessages: true,
-                thinkingFormat: "deepseek",
-              },
+    models: models.map((model) => ({
+      id: model.id,
+      name: model.name,
+      api,
+      reasoning: true,
+      input: ["text"] as ["text"],
+      cost: model.cost,
+      contextWindow: 1_048_576,
+      maxTokens: 384_000,
+      thinkingLevelMap: {
+        off: null,
+        minimal: null,
+        low: "low",
+        medium: "high",
+        high: "high",
+        xhigh: "high",
+        max: "max",
       },
-    ],
+      compat:
+        options.transport === "responses"
+          ? {
+              supportsDeveloperRole: true,
+              supportsLongCacheRetention: false,
+              supportsStrictMode: false,
+              supportsOpenAIGrammarTools: true,
+              sessionAffinityFormat: "openai-nosession",
+            }
+          : {
+              supportsStore: false,
+              supportsDeveloperRole: false,
+              requiresReasoningContentOnAssistantMessages: true,
+              thinkingFormat: "deepseek",
+            },
+    })),
   });
 }
 
