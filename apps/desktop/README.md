@@ -5,6 +5,26 @@ agent runtime in the shared core package and provides a native desktop host for 
 streaming messages, tool activity, approvals, authentication, models, reasoning levels, and image
 input.
 
+## Download
+
+<p align="center">
+  <img src="../../assets/dscode-desktop.png" width="1200" alt="DSCode Desktop conversation view">
+</p>
+
+Download **DSCode Desktop v0.1.0** from the
+[release page](https://github.com/thinkany-ai/dscode/releases/tag/desktop-v0.1.0):
+
+| Platform | Installer |
+| --- | --- |
+| macOS · Apple Silicon | [DMG](https://github.com/thinkany-ai/dscode/releases/download/desktop-v0.1.0/DSCode_0.1.0_arm64.dmg) |
+| macOS · Intel | [DMG](https://github.com/thinkany-ai/dscode/releases/download/desktop-v0.1.0/DSCode_0.1.0_x64.dmg) |
+| Windows · x64 | [Setup EXE](https://github.com/thinkany-ai/dscode/releases/download/desktop-v0.1.0/DSCode_0.1.0_x64-setup.exe) |
+| Debian / Ubuntu · x64 | [DEB](https://github.com/thinkany-ai/dscode/releases/download/desktop-v0.1.0/DSCode_0.1.0_amd64.deb) |
+| Fedora / RHEL · x64 | [RPM](https://github.com/thinkany-ai/dscode/releases/download/desktop-v0.1.0/DSCode_0.1.0_x86_64.rpm) |
+
+The macOS builds are signed, notarized by Apple, and stapled. Windows and Linux builds are currently
+unsigned. Portable macOS ZIP archives are also available on the release page.
+
 ## Development
 
 Requirements: Node.js 22.19+ and pnpm 10.12+. Run these commands from the repository root:

@@ -21,6 +21,26 @@ provider-aware 路由、本地会话、安全 patch、并行 agent、OS sandbox�
 DSCode 不追求在功能数量上超过所有通用 coding agent；目标是保持 runtime 本地、透明，并允许
 每个仓库任务选择真正需要的模型能力。
 
+## 桌面客户端
+
+<p align="center">
+  <img src="assets/dscode-desktop.png" width="1200" alt="DSCode Desktop 会话界面">
+</p>
+
+可从 [DSCode Desktop v0.1.0 发布页](https://github.com/thinkany-ai/dscode/releases/tag/desktop-v0.1.0)
+下载，也可以直接选择对应安装包：
+
+| 平台 | 下载 |
+| --- | --- |
+| macOS · Apple Silicon | [DMG](https://github.com/thinkany-ai/dscode/releases/download/desktop-v0.1.0/DSCode_0.1.0_arm64.dmg) |
+| macOS · Intel | [DMG](https://github.com/thinkany-ai/dscode/releases/download/desktop-v0.1.0/DSCode_0.1.0_x64.dmg) |
+| Windows · x64 | [安装程序 EXE](https://github.com/thinkany-ai/dscode/releases/download/desktop-v0.1.0/DSCode_0.1.0_x64-setup.exe) |
+| Debian / Ubuntu · x64 | [DEB](https://github.com/thinkany-ai/dscode/releases/download/desktop-v0.1.0/DSCode_0.1.0_amd64.deb) |
+| Fedora / RHEL · x64 | [RPM](https://github.com/thinkany-ai/dscode/releases/download/desktop-v0.1.0/DSCode_0.1.0_x86_64.rpm) |
+
+macOS 版本已经过 Developer ID 签名、Apple 公证并附带 staple 票据；Windows 和 Linux 版本目前
+未签名。开发与打包说明见 [Desktop 文档](apps/desktop/README.md)。
+
 ## 为什么选择 DSCode
 
 - **DeepSeek 优先，但不限于 DeepSeek。** DeepSeek V4 Flash 仍是默认模型，继续使用专用 Responses
