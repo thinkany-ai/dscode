@@ -44,6 +44,7 @@ function toSessionSummary(thread: Awaited<ReturnType<typeof listDSCodeThreads>>[
     updatedAt: thread.updatedAt,
     ...(thread.provider ? { provider: thread.provider } : {}),
     ...(thread.model ? { model: thread.model } : {}),
+    ...(thread.permission && thread.permission !== "trusted-workspace" ? { permission: thread.permission } : {}),
     messageCount: thread.messageCount,
     ...(thread.preview ? { preview: thread.preview } : {}),
     pinned: thread.pinned,

@@ -12,7 +12,13 @@ export const transportSchema = z.enum(["responses", "chat"]);
 export type ModelTransport = z.infer<typeof transportSchema>;
 export const harnessSchema = z.enum(["minimal", "safe"]);
 export type HarnessMode = z.infer<typeof harnessSchema>;
-export const permissionSchema = z.enum(["plan", "ask", "auto", "full"]);
+/**
+ * `trusted-workspace` is reserved for local integrations (for example the
+ * built-in Weixin channel).  It keeps the OS workspace sandbox while allowing
+ * non-interactive work and network access.  It is intentionally not advertised
+ * as a general CLI preset.
+ */
+export const permissionSchema = z.enum(["plan", "ask", "auto", "full", "trusted-workspace"]);
 export type PermissionMode = z.infer<typeof permissionSchema>;
 
 export interface AppConfig {

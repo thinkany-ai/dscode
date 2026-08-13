@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { ThemePalette, ThemeSummary } from "../shared/types";
+import type { ThemeBootstrap, ThemeMode, ThemePalette, ThemePreference, ThemeSummary } from "../shared/types";
 
 /**
  * Codexthemes (https://codexthemes.ai) publishes community themes as folders under
@@ -11,6 +11,60 @@ import type { ThemePalette, ThemeSummary } from "../shared/types";
  * target a different app's DOM structure.
  */
 const THEMES_ROOT = path.join(os.homedir(), ".codexthemes", "themes");
+
+export const BUILTIN_THEME_PALETTES: Record<ThemeMode, ThemePalette> = {
+  light: {
+    canvas: "#f7f7f5",
+    surface: "#eeedea",
+    raised: "#ffffff",
+    text: "#20201e",
+    muted: "#6d6c67",
+    accent: "#282825",
+    border: "#ddddd8",
+    focus: "#5967c7",
+    success: "#39775b",
+    warning: "#a75b32",
+    danger: "#b6463f",
+  },
+  dark: {
+    canvas: "#20201f",
+    surface: "#191918",
+    raised: "#292928",
+    text: "#ededeb",
+    muted: "#aaa9a3",
+    accent: "#ededeb",
+    border: "#3b3b38",
+    focus: "#9aa4f3",
+    success: "#72b995",
+    warning: "#e49a66",
+    danger: "#e1776f",
+  },
+};
+
+export function resolveThemeBootstrap(
+  preference: ThemePreference,
+  themes: ThemeSummary[],
+  systemDark: boolean,
+): ThemeBootstrap {
+  if (preference.source === "custom") {
+    const activeTheme = themes.find((theme) => theme.id === preference.id);
+    if (activeTheme) {
+      return { preference, resolvedMode: activeTheme.mode, themes, activeTheme };
+    }
+    return {
+      preference: { source: "system" },
+      resolvedMode: systemDark ? "dark" : "light",
+      themes,
+      activeTheme: null,
+    };
+  }
+  return {
+    preference,
+    resolvedMode: preference.source === "builtin" ? preference.mode : systemDark ? "dark" : "light",
+    themes,
+    activeTheme: null,
+  };
+}
 
 export async function listCodexThemes(root: string = THEMES_ROOT): Promise<ThemeSummary[]> {
   let entries: string[];

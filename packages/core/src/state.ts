@@ -9,6 +9,8 @@ import {
   getDSCodeSessionsDir,
   partitionSessionFile,
 } from "./home.js";
+import type { PermissionMode } from "./config.js";
+import { permissionFromSessionEntry } from "./session-permission.js";
 import { getDSCodeStorageSettings } from "./settings.js";
 
 type JsonRecord = Record<string, unknown>;
@@ -23,6 +25,7 @@ export interface DSCodeThread {
   preview?: string;
   provider?: string;
   model?: string;
+  permission?: PermissionMode;
   createdAt: string;
   updatedAt: string;
   messageCount: number;
@@ -44,6 +47,7 @@ interface ThreadRow {
   preview: string | null;
   provider: string | null;
   model: string | null;
+  permission: string | null;
   created_at: number;
   updated_at: number;
   message_count: number;
@@ -82,6 +86,7 @@ export class DSCodeStateStore {
         preview TEXT,
         provider TEXT,
         model TEXT,
+        permission TEXT,
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL,
         message_count INTEGER NOT NULL DEFAULT 0,
@@ -93,8 +98,13 @@ export class DSCodeStateStore {
       CREATE INDEX IF NOT EXISTS threads_updated_at_idx ON threads(archived, pinned DESC, updated_at DESC);
       CREATE INDEX IF NOT EXISTS threads_cwd_idx ON threads(cwd, archived, updated_at DESC);
       CREATE INDEX IF NOT EXISTS threads_storage_path_idx ON threads(storage_path);
-      PRAGMA user_version = 1;
+      PRAGMA user_version = 2;
     `);
+    const threadColumns = this.database.prepare("PRAGMA table_info(threads)").all() as Array<{ name: string }>;
+    if (!threadColumns.some((column) => column.name === "permission")) {
+      this.database.exec("ALTER TABLE threads ADD COLUMN permission TEXT");
+      this.database.exec("UPDATE threads SET file_size = -1");
+    }
     if (statePath !== ":memory:") fsSync.chmodSync(statePath, 0o600);
     this.findByPath = this.database.prepare(
       "SELECT * FROM threads WHERE session_path = ? OR storage_path = ? LIMIT 1",
@@ -237,9 +247,9 @@ export class DSCodeStateStore {
     this.database
       .prepare(`
         INSERT INTO threads (
-          id, session_path, storage_path, cwd, title, preview, provider, model,
+          id, session_path, storage_path, cwd, title, preview, provider, model, permission,
           created_at, updated_at, message_count, pinned, archived, file_size, file_mtime_ms
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
           session_path = excluded.session_path,
           storage_path = excluded.storage_path,
@@ -248,6 +258,7 @@ export class DSCodeStateStore {
           preview = excluded.preview,
           provider = excluded.provider,
           model = excluded.model,
+          permission = excluded.permission,
           created_at = excluded.created_at,
           updated_at = excluded.updated_at,
           message_count = excluded.message_count,
@@ -264,6 +275,7 @@ export class DSCodeStateStore {
         parsed.preview ?? null,
         parsed.provider ?? null,
         parsed.model ?? null,
+        parsed.permission ?? null,
         parsed.createdAt,
         stat.mtimeMs,
         parsed.messageCount,
@@ -305,6 +317,7 @@ async function parseSession(
       preview?: string;
       provider?: string;
       model?: string;
+      permission?: PermissionMode;
       createdAt: number;
       messageCount: number;
     }
@@ -326,10 +339,12 @@ async function parseSession(
   let namedTitle: string | undefined;
   let provider: string | undefined;
   let model: string | undefined;
+  let permission: PermissionMode | undefined;
   let messageCount = 0;
   for (const line of lines.slice(1)) {
     const entry = parseLine(line);
     if (!entry) continue;
+    permission = permissionFromSessionEntry(entry) ?? permission;
     if (entry.type === "model_change") {
       if (typeof entry.provider === "string") provider = entry.provider;
       if (typeof entry.modelId === "string") model = entry.modelId;
@@ -353,12 +368,14 @@ async function parseSession(
     ...(preview ? { preview: crop(preview, 240) } : {}),
     ...(provider ? { provider } : {}),
     ...(model ? { model } : {}),
+    ...(permission ? { permission } : {}),
     createdAt,
     messageCount,
   };
 }
 
 function rowToThread(row: ThreadRow): DSCodeThread {
+  const permission = permissionSchemaValue(row.permission);
   return {
     id: row.id,
     sessionPath: row.session_path,
@@ -368,12 +385,19 @@ function rowToThread(row: ThreadRow): DSCodeThread {
     ...(row.preview ? { preview: row.preview } : {}),
     ...(row.provider ? { provider: row.provider } : {}),
     ...(row.model ? { model: row.model } : {}),
+    ...(permission ? { permission } : {}),
     createdAt: new Date(row.created_at).toISOString(),
     updatedAt: new Date(row.updated_at).toISOString(),
     messageCount: row.message_count,
     pinned: Boolean(row.pinned),
     archived: Boolean(row.archived),
   };
+}
+
+function permissionSchemaValue(value: string | null): PermissionMode | undefined {
+  return value === "plan" || value === "ask" || value === "auto" || value === "full"
+    ? value
+    : undefined;
 }
 
 async function directJsonlFiles(directory: string): Promise<string[]> {

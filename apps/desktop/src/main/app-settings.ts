@@ -2,14 +2,23 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { TONE_PRESETS } from "../shared/types";
-import type { LanguagePreference, PersonalizationSettings, TonePreset, UserProfile } from "../shared/types";
+import type {
+  AgentDefaults,
+  LanguagePreference,
+  PersonalizationSettings,
+  ThemePreference,
+  TonePreset,
+  UserProfile,
+} from "../shared/types";
 
 interface AppSettingsData {
   themeId?: string | null;
+  themePreference?: ThemePreference;
   language?: LanguagePreference;
   profile?: UserProfile;
   showReasoningProcess?: boolean;
   personalization?: PersonalizationSettings;
+  agentDefaults?: AgentDefaults;
 }
 
 const LANGUAGE_PREFERENCES = new Set<LanguagePreference>(["system", "zh-CN", "en"]);
@@ -22,14 +31,24 @@ export class AppSettings {
     private readonly defaultNickname: string = systemNickname(),
   ) {}
 
-  async getThemeId(): Promise<string | null> {
+  async getThemePreference(): Promise<ThemePreference> {
     const data = await this.read();
-    return typeof data.themeId === "string" ? data.themeId : null;
+    if (isThemePreference(data.themePreference)) return data.themePreference;
+    if (typeof data.themeId === "string" && data.themeId.trim()) {
+      const themePreference: ThemePreference = { source: "custom", id: data.themeId };
+      data.themePreference = themePreference;
+      delete data.themeId;
+      await this.write(data);
+      return themePreference;
+    }
+    return { source: "system" };
   }
 
-  async setThemeId(themeId: string | null): Promise<void> {
+  async setThemePreference(themePreference: ThemePreference): Promise<void> {
+    if (!isThemePreference(themePreference)) throw new Error("Unsupported theme preference");
     const data = await this.read();
-    data.themeId = themeId;
+    data.themePreference = themePreference;
+    delete data.themeId;
     await this.write(data);
   }
 
@@ -106,6 +125,26 @@ export class AppSettings {
     await this.write(data);
   }
 
+  async getAgentDefaults(): Promise<AgentDefaults> {
+    const data = await this.read();
+    const defaults = data.agentDefaults;
+    if (defaults && typeof defaults.provider === "string" && typeof defaults.model === "string" && defaults.model.trim()) {
+      return {
+        provider: defaults.provider,
+        model: defaults.model.trim(),
+        ...(typeof defaults.effort === "string" && defaults.effort ? { effort: defaults.effort } : {}),
+      };
+    }
+    return { provider: "deepseek", model: "deepseek-v4-flash", effort: "max" };
+  }
+
+  async setAgentDefaults(defaults: AgentDefaults): Promise<void> {
+    if (!defaults.model.trim()) throw new Error("Model is required");
+    const data = await this.read();
+    data.agentDefaults = { ...defaults, model: defaults.model.trim() };
+    await this.write(data);
+  }
+
   private async read(): Promise<AppSettingsData> {
     try {
       const parsed = JSON.parse(await fs.readFile(this.file, "utf8")) as unknown;
@@ -120,6 +159,17 @@ export class AppSettings {
     await fs.mkdir(path.dirname(this.file), { recursive: true });
     await fs.writeFile(this.file, `${JSON.stringify(data, null, 2)}\n`, { mode: 0o600 });
   }
+}
+
+function isThemePreference(value: unknown): value is ThemePreference {
+  if (!value || typeof value !== "object") return false;
+  const candidate = value as Record<string, unknown>;
+  if (candidate.source === "system") return true;
+  if (candidate.source === "builtin") return candidate.mode === "light" || candidate.mode === "dark";
+  return candidate.source === "custom"
+    && typeof candidate.id === "string"
+    && candidate.id.trim().length > 0
+    && candidate.id.length <= 200;
 }
 
 function systemNickname(): string {

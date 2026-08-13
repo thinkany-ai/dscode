@@ -21,6 +21,7 @@ export class SessionAccessController {
 
   effective(permission: PermissionMode): EffectiveAccess {
     if (permission === "full") return { sandbox: "danger-full-access", network: true };
+    if (permission === "trusted-workspace") return { sandbox: this.baseSandbox, network: true };
     return {
       sandbox: permission === "plan" ? "read-only" : this.baseSandbox,
       network: this.baseNetwork || this.baseSandbox === "danger-full-access",

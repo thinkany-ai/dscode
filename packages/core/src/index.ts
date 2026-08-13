@@ -4,6 +4,7 @@ export {
   runDSCodeProcess,
 } from "./cli-runtime.js";
 export { createDSCodeExtension } from "./dscode-extension.js";
+export { setDSCodeProjectTrusted } from "./project-trust.js";
 export {
   createDSCodeRpcClient,
   getDSCodeRpcEntryPath,
@@ -96,4 +97,10 @@ export {
   type PersonalizationPreferences,
   type PersonalizationTone,
 } from "./personalization.js";
+export {
+  SESSION_PERMISSION_ENTRY,
+  permissionFromSessionEntry,
+  restoreSessionPermission,
+  type RestoredSessionPermission,
+} from "./session-permission.js";
 export { DSCODE_VERSION } from "./version.js";

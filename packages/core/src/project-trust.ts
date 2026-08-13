@@ -50,3 +50,7 @@ export function registerDSCodeProjectTrust(
     return { trusted: "no" };
   });
 }
+
+export function setDSCodeProjectTrusted(cwd: string, trusted = true, agentDir = getDSCodeAgentDir()): void {
+  new ProjectTrustStore(agentDir).setMany([{ path: path.resolve(cwd), decision: trusted }]);
+}

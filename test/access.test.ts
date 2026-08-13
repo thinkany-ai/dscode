@@ -12,6 +12,15 @@ describe("Codex-style scoped access escalation", () => {
     expect(access.effective("full")).toEqual({ sandbox: "danger-full-access", network: true });
   });
 
+  it("keeps the workspace boundary for the trusted Weixin runtime", () => {
+    const access = new SessionAccessController("workspace-write", false);
+    expect(access.effective("trusted-workspace")).toEqual({ sandbox: "workspace-write", network: true });
+    expect(access.forCommand("trusted-workspace", "curl https://example.com")).toEqual({
+      sandbox: "workspace-write",
+      network: true,
+    });
+  });
+
   it("supports one-shot and session network grants", () => {
     const access = new SessionAccessController("workspace-write", false);
     expect(access.grantOnce("auto", "network")).toEqual({
