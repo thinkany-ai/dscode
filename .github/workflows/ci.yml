@@ -63,7 +63,26 @@ jobs:
             exit 1
           fi
           if [ "$package_version" = "$base_version" ]; then
-            release_source_changes="$(git diff --name-only "origin/$GITHUB_BASE_REF...HEAD" | grep -Ev '^(\.github/|docs/|apps/desktop/|pnpm-lock\.yaml$|pnpm-workspace\.yaml$)' || true)"
+            release_source_changes="$(git diff --name-only "origin/$GITHUB_BASE_REF...HEAD" | grep -Ev '^(\.github/|docs/|apps/desktop/|README(\.zh-CN)?\.md$|package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$)' || true)"
+            root_manifest_changes="$(node -e '
+              const fs = require("node:fs");
+              const normalize = (filename) => {
+                const manifest = JSON.parse(fs.readFileSync(filename, "utf8"));
+                for (const name of Object.keys(manifest.scripts ?? {})) {
+                  if (name.startsWith("desktop:")) delete manifest.scripts[name];
+                }
+                if (manifest.scripts?.test === "vitest run --exclude=apps/desktop/**") {
+                  manifest.scripts.test = "vitest run";
+                }
+                return JSON.stringify(manifest);
+              };
+              if (normalize(process.argv[1]) !== normalize(process.argv[2])) {
+                process.stdout.write("package.json");
+              }
+            ' "$base_package" package.json)"
+            if [ -n "$root_manifest_changes" ]; then
+              release_source_changes="$(printf '%s\n%s\n' "$release_source_changes" "$root_manifest_changes" | sed '/^$/d')"
+            fi
             if [ -n "$release_source_changes" ]; then
               echo "::error::Bump package.json version before merging a release to main."
               printf '%s\n' "$release_source_changes"
