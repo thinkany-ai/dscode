@@ -51,6 +51,8 @@ nsis:
 linux:
   icon: build/icon.png
   category: Development
+  executableName: dscode
+  syncDesktopName: true
   target:
     - target: deb
       arch: [x64]
