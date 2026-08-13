@@ -22,6 +22,12 @@ transparent usage reporting.
 It is not trying to out-feature every general-purpose agent. It keeps the runtime local and inspectable
 while letting each repository task use the model capabilities it actually needs.
 
+## Terminal app
+
+<p align="center">
+  <img src="docs/assets/dscode-terminal.png" width="1200" alt="DSCode terminal interface">
+</p>
+
 ## Desktop app
 
 <p align="center">

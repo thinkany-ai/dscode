@@ -21,6 +21,12 @@ provider-aware 路由、本地会话、安全 patch、并行 agent、OS sandbox�
 DSCode 不追求在功能数量上超过所有通用 coding agent；目标是保持 runtime 本地、透明，并允许
 每个仓库任务选择真正需要的模型能力。
 
+## 终端客户端
+
+<p align="center">
+  <img src="docs/assets/dscode-terminal.png" width="1200" alt="DSCode 终端界面">
+</p>
+
 ## 桌面客户端
 
 <p align="center">
