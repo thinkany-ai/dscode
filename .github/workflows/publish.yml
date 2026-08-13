@@ -103,7 +103,11 @@ jobs:
 
       - name: Install dependencies
         if: steps.registry.outputs.cli_already_published != 'true' || steps.registry.outputs.core_already_published != 'true'
-        run: pnpm install --frozen-lockfile
+        run: >-
+          pnpm install --frozen-lockfile
+          --filter @thinkany/dscode
+          --filter @thinkany/dscode-core
+          --filter @thinkany/dscode-http-adapter
 
       - name: Prepare Linux sandbox image
         if: steps.registry.outputs.cli_already_published != 'true' || steps.registry.outputs.core_already_published != 'true'

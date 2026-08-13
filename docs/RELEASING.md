@@ -59,3 +59,14 @@ Protect `main` with these repository rules:
 - allow releases only from tags created on `main`
 
 Keep `dev` as the repository default branch.
+
+## Desktop releases
+
+The Electron application under `apps/desktop` has an independent version and release line. Desktop
+changes merge through `dev` like the rest of the repository, but they do not require a CLI/Core version
+bump. Push a tag matching `desktop-v<version>` (for example, `desktop-v0.1.0`) from a commit on `main`
+to build the macOS, Windows, and Linux artifacts and create a draft GitHub Release.
+
+The Desktop workflow also runs compatibility builds when either `apps/desktop` or `packages/core`
+changes. Keep `apps/desktop/package.json` on `workspace:*` for Core so a single pull request validates
+both sides of an RPC or API change before either product is released.
