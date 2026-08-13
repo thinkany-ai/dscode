@@ -29,7 +29,7 @@ const earlyExit = await Promise.race([
 ]);
 
 if (earlyExit) {
-  await fsp.rm(temporaryRoot, { recursive: true, force: true });
+  await removeTemporaryRoot();
   throw new Error(
     `Packaged DSCode exited before the smoke window elapsed (${JSON.stringify(earlyExit)}).\n${output}`,
   );
@@ -40,8 +40,24 @@ await Promise.race([
   new Promise((resolve) => child.once("exit", resolve)),
   new Promise((resolve) => setTimeout(resolve, 2_000)),
 ]);
-await fsp.rm(temporaryRoot, { recursive: true, force: true });
+await removeTemporaryRoot();
 console.log(`Packaged DSCode stayed running for 6 seconds: ${executable}`);
+
+async function removeTemporaryRoot() {
+  try {
+    await fsp.rm(temporaryRoot, {
+      recursive: true,
+      force: true,
+      maxRetries: 10,
+      retryDelay: 250,
+    });
+  } catch (error) {
+    // Chromium can briefly retain its Trust Tokens file after process exit on
+    // Windows. Cleanup is best-effort and must not turn a successful launch
+    // smoke test into a product failure.
+    console.warn(`Could not remove packaged smoke data: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
 
 function findPackagedExecutable() {
   const candidates = process.platform === "darwin"

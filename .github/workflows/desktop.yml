@@ -119,15 +119,62 @@ jobs:
         if: steps.mode.outputs.skip != 'true'
         run: pnpm desktop:check
 
+      - name: Validate macOS signing credentials
+        if: steps.mode.outputs.skip != 'true' && matrix.platform == 'macos' && steps.mode.outputs.release == 'true'
+        shell: bash
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          for variable in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
+            if [[ -z "${!variable:-}" ]]; then
+              echo "Missing required repository secret: $variable" >&2
+              exit 1
+            fi
+          done
+
       - name: Build signed and notarized macOS artifacts
         if: steps.mode.outputs.skip != 'true' && matrix.platform == 'macos' && steps.mode.outputs.release == 'true'
         env:
           CSC_LINK: ${{ secrets.APPLE_CERTIFICATE }}
           CSC_KEY_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          CSC_NAME: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: pnpm --dir apps/desktop exec electron-builder ${{ matrix.args }} --publish never
+
+      - name: Notarize, staple, and verify macOS disk images
+        if: steps.mode.outputs.skip != 'true' && matrix.platform == 'macos' && steps.mode.outputs.release == 'true'
+        shell: bash
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          shopt -s nullglob
+          disk_images=(apps/desktop/release/*.dmg)
+          if [[ ${#disk_images[@]} -ne 2 ]]; then
+            echo "Expected two macOS disk images, found ${#disk_images[@]}." >&2
+            exit 1
+          fi
+          for disk_image in "${disk_images[@]}"; do
+            xcrun notarytool submit "$disk_image" \
+              --apple-id "$APPLE_ID" \
+              --password "$APPLE_PASSWORD" \
+              --team-id "$APPLE_TEAM_ID" \
+              --wait
+            xcrun stapler staple "$disk_image"
+            xcrun stapler validate "$disk_image"
+          done
+          for application in apps/desktop/release/mac/DSCode.app apps/desktop/release/mac-arm64/DSCode.app; do
+            codesign --verify --deep --strict "$application"
+            spctl --assess --type execute --verbose=2 "$application"
+          done
 
       - name: Build unsigned macOS verification artifacts
         if: steps.mode.outputs.skip != 'true' && matrix.platform == 'macos' && steps.mode.outputs.release != 'true'

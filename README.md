@@ -285,6 +285,8 @@ The normal `@thinkany/dscode` tarball embeds its matching Core build, so existin
 not add a registry-time dependency or change their command, configuration, and session behavior.
 The Desktop package uses the monorepo's `workspace:*` Core dependency and embeds the matching Core
 build in each installer, preventing source and npm versions from drifting during development.
+Signed and notarized macOS installers, plus Windows and Linux packages, are available from
+[GitHub Releases](https://github.com/thinkany-ai/dscode/releases).
 
 ## Build from source
 
