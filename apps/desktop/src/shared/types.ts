@@ -8,6 +8,7 @@ export const PROVIDER_IDS = [
   "kimi-coding",
   "minimax",
   "xai",
+  "opencode-go",
 ] as const;
 
 export const AUTH_PROMPT_CANCEL_VALUE = "__dscode_auth_prompt_cancel__";

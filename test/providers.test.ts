@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { getBuiltinModel } from "@earendil-works/pi-ai/providers/all";
+import { opencodeGoProvider } from "@earendil-works/pi-ai/providers/opencode-go";
 import { openaiCodexProvider } from "@earendil-works/pi-ai/providers/openai-codex";
 import { openaiProvider } from "@earendil-works/pi-ai/providers/openai";
 import { afterEach, describe, expect, it } from "vitest";
@@ -36,6 +37,8 @@ describe("DSCode model providers", () => {
     expect(defaultModelForProvider("kimi-coding")).toBe("kimi-for-coding");
     expect(defaultModelForProvider("minimax")).toBe("MiniMax-M2.7");
     expect(defaultModelForProvider("xai")).toBe("grok-4.5");
+    expect(defaultModelForProvider("opencode-go")).toBe("kimi-k2.6");
+    expect(defaultEffortForProvider("opencode-go")).toBe("medium");
   });
 
   it("ships every configured provider default in the built-in model catalog", () => {
@@ -49,6 +52,7 @@ describe("DSCode model providers", () => {
       "kimi-coding",
       "minimax",
       "xai",
+      "opencode-go",
     ] as const) {
       expect(getBuiltinModel(providerId, defaultModelForProvider(providerId))).toBeDefined();
     }
@@ -57,6 +61,12 @@ describe("DSCode model providers", () => {
   it("normalizes the familiar Kimi and Grok provider names", () => {
     expect(parseSupportedProviderId("kimi")).toBe("kimi-coding");
     expect(parseSupportedProviderId("grok")).toBe("xai");
+    expect(parseSupportedProviderId("opencode-go")).toBe("opencode-go");
+  });
+
+  it("exposes OpenCode Zen Go as API-key auth, not OAuth", () => {
+    expect(opencodeGoProvider().auth.apiKey).toBeDefined();
+    expect(opencodeGoProvider().auth.oauth).toBeUndefined();
   });
 
   it("ships the default OpenAI models with image input support", () => {
@@ -99,6 +109,7 @@ describe("DSCode model providers", () => {
       KIMI_API_KEY: "kimi-secret",
       MINIMAX_API_KEY: "minimax-secret",
       XAI_API_KEY: "xai-secret",
+      OPENCODE_API_KEY: "opencode-secret",
     });
     expect(environment).toEqual({ PATH: "/bin" });
   });

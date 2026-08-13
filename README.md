@@ -15,7 +15,7 @@
 </p>
 
 DSCode is an opinionated coding-agent runtime with DeepSeek V4 Flash as its economical default and
-built-in support for Codex, OpenAI, Anthropic, OpenRouter, Z.AI, Kimi, MiniMax, and xAI. It combines
+built-in support for Codex, OpenAI, Anthropic, OpenRouter, Z.AI, Kimi, MiniMax, xAI, and OpenCode Zen Go. It combines
 provider-aware model routing with local sessions, safe patching, parallel agents, OS sandboxing, and
 transparent usage reporting.
 
@@ -54,7 +54,7 @@ development and packaging details.
 
 - **DeepSeek-first, not DeepSeek-only.** DeepSeek V4 Flash remains the default, with its dedicated
   Responses adapter, native free-form `apply_patch`, and optional server-side Web Search. Switch to
-  Codex, OpenAI, Anthropic, OpenRouter, Z.AI, Kimi, MiniMax, or Grok without changing tools or sessions.
+  Codex, OpenAI, Anthropic, OpenRouter, Z.AI, Kimi, MiniMax, Grok, or OpenCode Zen Go without changing tools or sessions.
 - **Vision when the model supports it.** Paste an image in the TUI or pass an image as `@file`; models
   such as GPT-5.6 receive the actual image attachment while text-only DeepSeek models fail clearly.
 - **Cost-aware by design.** DeepSeek's 1M context and disk prefix cache are reflected in the runtime;
@@ -111,6 +111,7 @@ non-interactive commands and explicit provider-free configuration.
 | Kimi For Coding | `kimi-coding` | Kimi Code account or API key |
 | MiniMax | `minimax` | API key |
 | xAI / Grok | `xai` | Grok/X account or API key |
+| OpenCode Zen Go | `opencode-go` | API key |
 
 The aliases `kimi` and `grok` are accepted by `/login` and `--provider`.
 
@@ -135,6 +136,7 @@ dscode login openai-codex  # browser OAuth; uses ChatGPT plan limits
 dscode login openai        # securely prompts for an OpenAI API key
 dscode login anthropic     # Claude account or Anthropic API key
 dscode login openrouter    # OpenRouter account or API key
+dscode login opencode-go   # OpenCode Zen Go API key
 ```
 
 The selected provider and model are saved for later runs. Override them at any time:

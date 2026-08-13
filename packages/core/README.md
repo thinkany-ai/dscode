@@ -4,7 +4,7 @@ Reusable DSCode agent runtime for graphical clients, IDE integrations, and other
 
 The package owns the same provider routing, tools, permissions, sessions, Skills, MCP, hooks,
 checkpoints, and RPC behavior used by the `@thinkany/dscode` terminal client. DeepSeek remains the
-default; Codex, OpenAI, Anthropic, OpenRouter, Z.AI, Kimi, MiniMax, and xAI are supported by the same
+default; Codex, OpenAI, Anthropic, OpenRouter, Z.AI, Kimi, MiniMax, xAI, and OpenCode Zen Go are supported by the same
 runtime.
 
 ```ts

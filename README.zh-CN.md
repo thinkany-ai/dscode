@@ -15,7 +15,7 @@
 </p>
 
 DSCode 是一套有明确取舍的 coding-agent runtime：以经济的 DeepSeek V4 Flash 为默认模型，并
-内置支持 Codex、OpenAI、Anthropic、OpenRouter、Z.AI、Kimi、MiniMax 和 xAI。它把
+内置支持 Codex、OpenAI、Anthropic、OpenRouter、Z.AI、Kimi、MiniMax、xAI 和 OpenCode Zen Go。它把
 provider-aware 路由、本地会话、安全 patch、并行 agent、OS sandbox，以及用量统计组合在一起。
 
 DSCode 不追求在功能数量上超过所有通用 coding agent；目标是保持 runtime 本地、透明，并允许
@@ -51,7 +51,7 @@ macOS 版本已经过 Developer ID 签名、Apple 公证并附带 staple 票据�
 
 - **DeepSeek 优先，但不限于 DeepSeek。** DeepSeek V4 Flash 仍是默认模型，继续使用专用 Responses
   adapter、原生 freeform `apply_patch` 和服务端 Web Search；也可以在不改变工具与会话的情况下
-  切换到 Codex、OpenAI、Anthropic、OpenRouter、Z.AI、Kimi、MiniMax 或 Grok。
+  切换到 Codex、OpenAI、Anthropic、OpenRouter、Z.AI、Kimi、MiniMax、Grok 或 OpenCode Zen Go。
 - **模型支持时可识图。** 可在 TUI 粘贴图片或通过 `@file` 传入；GPT-5.6 等模型能检查截图，
   会收到真正的图片 attachment，text-only DeepSeek 模型则会给出明确限制。
 - **围绕成本设计。** Runtime 直接利用 DeepSeek 的 1M context 和硬盘前缀缓存；`/status` 会显示
@@ -104,6 +104,7 @@ dscode -C /path/to/project
 | Kimi For Coding | `kimi-coding` | Kimi Code 账号或 API key |
 | MiniMax | `minimax` | API key |
 | xAI / Grok | `xai` | Grok/X 账号或 API key |
+| OpenCode Zen Go | `opencode-go` | API key |
 
 `/login` 和 `--provider` 也接受 `kimi`、`grok` 这两个易记别名。
 
@@ -127,6 +128,7 @@ dscode login openai-codex  # 浏览器 OAuth，使用 ChatGPT 套餐限额
 dscode login openai        # 安全输入 OpenAI API key
 dscode login anthropic     # Claude 账号或 Anthropic API key
 dscode login openrouter    # OpenRouter 账号或 API key
+dscode login opencode-go   # OpenCode Zen Go API key
 ```
 
 选择的 provider 和模型会保存供后续启动使用，也可以随时覆盖：
