@@ -9,6 +9,7 @@ import {
   type CSSProperties,
   type KeyboardEvent,
   type PointerEvent as ReactPointerEvent,
+  type WheelEvent as ReactWheelEvent,
 } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -60,6 +61,7 @@ import type {
   AuthUiEvent,
   ExtensionUiRequest,
   LanguagePreference,
+  PersonalizationSettings,
   PermissionMode,
   ProviderId,
   ProviderStatus,
@@ -67,12 +69,14 @@ import type {
   SandboxMode,
   SessionSummary,
   ThemeSummary,
+  TonePreset,
   UserProfile,
   WorkspaceItem,
 } from "../shared/types";
 import { AUTH_PROMPT_CANCEL_VALUE } from "../shared/types";
 import {
   applyAgentEvent,
+  getAssistantActivity,
   groupConversation,
   normalizeMessages,
   optimisticUserMessage,
@@ -83,10 +87,11 @@ import {
   type TurnWorkEntry,
 } from "./lib/conversation";
 import { applyTheme } from "./lib/theme";
-import { useI18n } from "./lib/i18n";
+import { localizeExtensionUiRequest, useI18n } from "./lib/i18n";
 import { isAgentSessionClosedError, isAuthPromptCancelledError } from "./lib/errors";
 import { isPreviewPathInWorkspace, previewPathsFromText } from "./lib/file-preview";
 import { parseStructuredPlan, type StructuredPlan } from "./lib/plan";
+import { updateConversationTailFollowing } from "./lib/conversation-scroll";
 
 interface Attachment extends ChatImage {
   name: string;
@@ -106,6 +111,21 @@ const MIN_INSPECTOR_WIDTH = 320;
 const MAX_INSPECTOR_WIDTH = 880;
 const MIN_CONVERSATION_WIDTH = 440;
 const INSPECTOR_RESIZER_WIDTH = 7;
+const MAX_CUSTOM_INSTRUCTION_LENGTH = 1_500;
+const PERSONALIZATION_TONES = [
+  { id: "default", label: "settings.toneDefault", description: "settings.toneDefaultDescription" },
+  { id: "professional", label: "settings.toneProfessional", description: "settings.toneProfessionalDescription" },
+  { id: "friendly", label: "settings.toneFriendly", description: "settings.toneFriendlyDescription" },
+  { id: "candid", label: "settings.toneCandid", description: "settings.toneCandidDescription" },
+  { id: "quirky", label: "settings.toneQuirky", description: "settings.toneQuirkyDescription" },
+  { id: "efficient", label: "settings.toneEfficient", description: "settings.toneEfficientDescription" },
+  { id: "cynical", label: "settings.toneCynical", description: "settings.toneCynicalDescription" },
+  { id: "inspiring", label: "settings.toneInspiring", description: "settings.toneInspiringDescription" },
+] as const satisfies ReadonlyArray<{ id: TonePreset; label: string; description: string }>;
+
+function unicodeLength(value: string): number {
+  return Array.from(value).length;
+}
 
 function inspectorBoundsForLayout(layoutWidth: number) {
   const availableWidth = layoutWidth - MIN_CONVERSATION_WIDTH - INSPECTOR_RESIZER_WIDTH;
@@ -129,6 +149,8 @@ export default function App() {
   const [themes, setThemes] = useState<ThemeSummary[]>([]);
   const [themeId, setThemeId] = useState<string | null>(null);
   const [profile, setProfile] = useState<UserProfile>({ nickname: "User" });
+  const [showReasoningProcess, setShowReasoningProcess] = useState(false);
+  const [personalization, setPersonalization] = useState<PersonalizationSettings>({ tone: "default", customInstructions: "" });
   const [model, setModel] = useState("deepseek-v4-flash");
   const [effort, setEffort] = useState("max");
   const [permission, setPermission] = useState<PermissionMode>("auto");
@@ -162,6 +184,8 @@ export default function App() {
   const authCancellationRef = useRef(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const followingConversationTailRef = useRef(true);
+  const previousConversationScrollTopRef = useRef(0);
   const threadLayoutRef = useRef<HTMLDivElement>(null);
   const activeCwdRef = useRef<string | undefined>(undefined);
   const sidebarFooterRef = useRef<HTMLDivElement>(null);
@@ -255,6 +279,8 @@ export default function App() {
     activeCwdRef.current = cwd;
     setWorkspace(projectPath);
     if (!background) {
+      followingConversationTailRef.current = true;
+      previousConversationScrollTopRef.current = 0;
       previewRequestRef.current += 1;
       setFilePreview(undefined);
       setPreviewError(undefined);
@@ -296,13 +322,15 @@ export default function App() {
   useEffect(() => {
     let cancelled = false;
     void (async () => {
-      const [recentItems, allSessions, providerItems, themeItems, activeThemeId, storedProfile] = await Promise.all([
+      const [recentItems, allSessions, providerItems, themeItems, activeThemeId, storedProfile, storedShowReasoningProcess, storedPersonalization] = await Promise.all([
         window.dscode.workspace.recent(),
         window.dscode.sessions.list(),
         window.dscode.auth.status(),
         window.dscode.themes.list(),
         window.dscode.themes.getActive(),
         window.dscode.settings.getProfile(),
+        window.dscode.settings.getShowReasoningProcess(),
+        window.dscode.settings.getPersonalization(),
       ]);
       if (cancelled) return;
       setWorkspaces(recentItems);
@@ -311,6 +339,8 @@ export default function App() {
       setThemes(themeItems);
       setThemeId(activeThemeId);
       setProfile(storedProfile);
+      setShowReasoningProcess(storedShowReasoningProcess);
+      setPersonalization(storedPersonalization);
       applyTheme(themeItems.find((item) => item.id === activeThemeId) ?? null);
       const configured = providerItems.find((item) => item.id === "deepseek" && item.configured)
         ?? providerItems.find((item) => item.configured);
@@ -431,9 +461,35 @@ export default function App() {
   }, [accountMenuOpen, running, searchOpen]);
 
   useEffect(() => {
-    if (!scrollRef.current) return;
-    scrollRef.current.scrollTo({ top: scrollRef.current.scrollHeight, behavior: running ? "smooth" : "auto" });
+    const scroller = scrollRef.current;
+    if (!scroller || !followingConversationTailRef.current) return;
+    const frame = window.requestAnimationFrame(() => {
+      if (!followingConversationTailRef.current) return;
+      scroller.scrollTop = scroller.scrollHeight;
+      previousConversationScrollTopRef.current = scroller.scrollTop;
+    });
+    return () => window.cancelAnimationFrame(frame);
   }, [messages, running, uiRequest]);
+
+  const handleConversationScroll = useCallback(() => {
+    const scroller = scrollRef.current;
+    if (!scroller) return;
+    const scrollTop = scroller.scrollTop;
+    followingConversationTailRef.current = updateConversationTailFollowing(
+      followingConversationTailRef.current,
+      previousConversationScrollTopRef.current,
+      {
+        scrollTop,
+        scrollHeight: scroller.scrollHeight,
+        clientHeight: scroller.clientHeight,
+      },
+    );
+    previousConversationScrollTopRef.current = scrollTop;
+  }, []);
+
+  const handleConversationWheel = useCallback((event: ReactWheelEvent<HTMLDivElement>) => {
+    if (event.deltaY < 0) followingConversationTailRef.current = false;
+  }, []);
 
   useEffect(() => {
     if (!toast) return;
@@ -644,6 +700,10 @@ export default function App() {
     return () => { cancelled = true; };
   }, [previewFileCandidates]);
   const conversationGroups = useMemo(() => groupConversation(messages), [messages]);
+  const latestAssistantGroup = [...conversationGroups].reverse().find((group) => group.type === "assistant");
+  const activeAssistantGroupId = running ? latestAssistantGroup?.id : undefined;
+  const activeAssistantHasWork = latestAssistantGroup?.type === "assistant"
+    && splitAssistantTurn(latestAssistantGroup.messages, running).work.length > 0;
   const projectPaths = useMemo(() => new Set(workspaces.map((item) => item.path)), [workspaces]);
 
   const showPreviewPanel = () => {
@@ -891,7 +951,12 @@ export default function App() {
             </header>
 
             <section className={`conversation-pane${contextCardOpen ? " context-card-visible" : ""}`}>
-            <div className="message-scroll" ref={scrollRef}>
+            <div
+              className="message-scroll"
+              ref={scrollRef}
+              onScroll={handleConversationScroll}
+              onWheel={handleConversationWheel}
+            >
               {loading ? (
                 <div className="loading-state"><LoaderCircle className="spin" size={20} /><span>{t("status.openingWorkspace")}</span></div>
               ) : messages.length === 0 && !uiRequest ? (
@@ -901,9 +966,22 @@ export default function App() {
                   {conversationGroups.map((group) => (
                     group.type === "user"
                       ? <UserMessage key={group.id} message={group.message} onPreview={setPreviewImage} />
-                      : <AssistantTurn key={group.id} messages={group.messages} onPreviewFile={(filePath) => void openFilePreview(filePath)} />
+                      : <AssistantTurn
+                          key={group.id}
+                          messages={group.messages}
+                          active={group.id === activeAssistantGroupId}
+                          showReasoningProcess={showReasoningProcess}
+                          onPreviewFile={(filePath) => void openFilePreview(filePath)}
+                        />
                   ))}
-                  {running && !uiRequest && !messages.at(-1)?.streaming && <div className="working-line"><span className="agent-orbit"><i /></span> {t("status.working")}</div>}
+                  {running && !uiRequest && !activeAssistantHasWork && (
+                    <div className="work-log active" role="status" aria-live="polite">
+                      <div className="work-log-summary work-log-status">
+                        <LoaderCircle className="spin work-log-spinner" size={14} aria-hidden="true" />
+                        <span>{t("work.thinkingStatus")}</span>
+                      </div>
+                    </div>
+                  )}
                   {uiRequest && (
                     <InlineExtensionRequest
                       key={uiRequest.id}
@@ -1050,6 +1128,8 @@ export default function App() {
           themes={themes}
           themeId={themeId}
           profile={profile}
+          showReasoningProcess={showReasoningProcess}
+          personalization={personalization}
           onClose={() => setSettingsOpen(false)}
           onRefresh={async () => setProviders(await window.dscode.auth.status())}
           onConnected={async (value) => {
@@ -1076,6 +1156,20 @@ export default function App() {
           onProfile={async (nextProfile) => {
             await window.dscode.settings.setProfile(nextProfile);
             setProfile(nextProfile);
+          }}
+          onShowReasoningProcess={async (value) => {
+            const previous = showReasoningProcess;
+            setShowReasoningProcess(value);
+            try {
+              await window.dscode.settings.setShowReasoningProcess(value);
+            } catch (error) {
+              setShowReasoningProcess(previous);
+              throw error;
+            }
+          }}
+          onPersonalization={async (nextPersonalization) => {
+            await window.dscode.settings.setPersonalization(nextPersonalization);
+            setPersonalization(nextPersonalization);
           }}
           onAuthStart={() => { authCancellationRef.current = false; }}
           consumeAuthCancellation={() => {
@@ -1279,13 +1373,30 @@ function ImageLightbox({ image, onClose }: { image: PreviewImage; onClose(): voi
   );
 }
 
-function AssistantTurn({ messages, onPreviewFile }: { messages: ChatMessage[]; onPreviewFile(filePath: string): void }) {
-  const { work, responses } = splitAssistantTurn(messages);
-  const active = messages.some((message) => message.streaming || message.tools.some((tool) => tool.status === "running"));
+function AssistantTurn({
+  messages,
+  active,
+  showReasoningProcess,
+  onPreviewFile,
+}: {
+  messages: ChatMessage[];
+  active: boolean;
+  showReasoningProcess: boolean;
+  onPreviewFile(filePath: string): void;
+}) {
+  const { work, responses } = splitAssistantTurn(messages, active);
 
   return (
     <article className="assistant-message">
-      {work.length > 0 && <WorkLog messages={messages} timeline={work} active={active} onPreviewFile={onPreviewFile} />}
+      {work.length > 0 && (
+        <WorkLog
+          messages={messages}
+          timeline={work}
+          active={active}
+          showReasoningProcess={showReasoningProcess}
+          onPreviewFile={onPreviewFile}
+        />
+      )}
       {responses.map((response) => (
         <div className="assistant-response" key={response.key}>
           <MarkdownContent text={response.text} onPreviewFile={onPreviewFile} />
@@ -1312,18 +1423,25 @@ function MarkdownContent({ text, className = "markdown-body", onPreviewFile }: {
   );
 }
 
-function WorkLog({ messages, timeline, active, onPreviewFile }: { messages: ChatMessage[]; timeline: TurnWorkEntry[]; active: boolean; onPreviewFile(filePath: string): void }) {
+function WorkLog({
+  messages,
+  timeline,
+  active,
+  showReasoningProcess,
+  onPreviewFile,
+}: {
+  messages: ChatMessage[];
+  timeline: TurnWorkEntry[];
+  active: boolean;
+  showReasoningProcess: boolean;
+  onPreviewFile(filePath: string): void;
+}) {
   const { t } = useI18n();
   const failed = messages.some((message) => message.tools.some((tool) => tool.status === "error"));
-  const [open, setOpen] = useState(active);
+  const activity = getAssistantActivity(messages);
+  const [open, setOpen] = useState(false);
   const [now, setNow] = useState(Date.now());
-  const wasActive = useRef(active);
-
-  useEffect(() => {
-    if (active) setOpen(true);
-    else if (wasActive.current) setOpen(false);
-    wasActive.current = active;
-  }, [active]);
+  const expanded = active || open;
 
   useEffect(() => {
     if (!active) return;
@@ -1334,23 +1452,35 @@ function WorkLog({ messages, timeline, active, onPreviewFile }: { messages: Chat
   const duration = workDuration(messages, active ? now : undefined);
   const latestWorkKey = timeline.at(-1)?.key;
   return (
-    <section className={`work-log ${open ? "open" : ""} ${active ? "active" : "complete"}`}>
+    <section className={`work-log ${expanded ? "open" : ""} ${active ? "active" : "complete"}`}>
       <button
         className="work-log-summary"
-        aria-expanded={open}
-        onClick={() => setOpen((value) => !value)}
+        aria-expanded={expanded}
+        aria-disabled={active}
+        onClick={() => { if (!active) setOpen((value) => !value); }}
       >
         {active && <LoaderCircle className="spin work-log-spinner" size={14} aria-hidden="true" />}
-        <span>{active ? t("work.working") : failed ? t("work.processedErrors") : t("work.processed")}</span>
+        <span aria-live="polite">
+          {active
+            ? t(activity === "tool" ? "work.toolStatus" : "work.thinkingStatus")
+            : failed
+              ? t("work.processedErrors")
+              : t("work.processed")}
+        </span>
         {duration !== undefined && <time>{formatElapsed(duration)}</time>}
         <ChevronDown className="work-log-chevron" size={15} />
       </button>
-      {open && (
+      {expanded && (
         <div className="work-log-content">
           <div className="work-timeline">
             {timeline.map(({ message, item, key }) => {
               if (item.type === "thinking") return (
-                <ReasoningBlock key={key} text={item.text} active={active && key === latestWorkKey} />
+                <ReasoningBlock
+                  key={key}
+                  text={item.text}
+                  active={active && key === latestWorkKey}
+                  autoExpand={showReasoningProcess}
+                />
               );
               if (item.type === "text") return <MarkdownContent key={key} text={item.text} className="work-text markdown-body" onPreviewFile={onPreviewFile} />;
               const tool = message.tools.find((candidate) => candidate.id === item.toolId);
@@ -1363,16 +1493,15 @@ function WorkLog({ messages, timeline, active, onPreviewFile }: { messages: Chat
   );
 }
 
-function ReasoningBlock({ text, active }: { text: string; active: boolean }) {
+function ReasoningBlock({ text, active, autoExpand }: { text: string; active: boolean; autoExpand: boolean }) {
   const { t } = useI18n();
-  const [open, setOpen] = useState(active);
-  const wasActive = useRef(active);
+  const [open, setOpen] = useState(active && autoExpand);
+  const previousAutoExpand = useRef(autoExpand);
 
   useEffect(() => {
-    if (active) setOpen(true);
-    else if (wasActive.current) setOpen(false);
-    wasActive.current = active;
-  }, [active]);
+    if (active && previousAutoExpand.current !== autoExpand) setOpen(autoExpand);
+    previousAutoExpand.current = autoExpand;
+  }, [active, autoExpand]);
 
   return (
     <div className={`reasoning-block ${open ? "open" : ""}`}>
@@ -1511,7 +1640,7 @@ function RefreshCwIcon() {
 
 function ToolRow({ tool, onPreviewFile }: { tool: ToolActivity; onPreviewFile?(filePath: string): void }) {
   const { t } = useI18n();
-  const [open, setOpen] = useState(tool.status === "running");
+  const [open, setOpen] = useState(false);
   const hasDetails = tool.args !== undefined || tool.output !== undefined;
   const filePath = toolFilePath(tool);
   const toolName = tool.name.toLowerCase();
@@ -1523,10 +1652,6 @@ function ToolRow({ tool, onPreviewFile }: { tool: ToolActivity; onPreviewFile?(f
       : toolName.includes("search")
         ? Search
         : FileCode2;
-
-  useEffect(() => {
-    if (tool.status === "running" && hasDetails) setOpen(true);
-  }, [hasDetails, tool.status]);
 
   return (
     <div className={`tool-entry ${open ? "open" : ""}`}>
@@ -1578,6 +1703,8 @@ function SettingsDialog(props: {
   themes: ThemeSummary[];
   themeId: string | null;
   profile: UserProfile;
+  showReasoningProcess: boolean;
+  personalization: PersonalizationSettings;
   onClose(): void;
   onRefresh(): Promise<void>;
   onConnected(value: ProviderId): Promise<void>;
@@ -1586,20 +1713,30 @@ function SettingsDialog(props: {
   onTheme(id: string | null): void;
   onRefreshThemes(): void;
   onProfile(profile: UserProfile): Promise<void>;
+  onShowReasoningProcess(value: boolean): Promise<void>;
+  onPersonalization(personalization: PersonalizationSettings): Promise<void>;
   onAuthStart(): void;
   consumeAuthCancellation(): boolean;
   onToast(message: string, type?: "info" | "error"): void;
 }) {
   const { language, setLanguage, t } = useI18n();
-  const [section, setSection] = useState<"general" | "models" | "agent" | "appearance" | "about">("general");
+  const [section, setSection] = useState<"general" | "personalization" | "models" | "agent" | "appearance" | "about">("general");
   const [selected, setSelected] = useState<ProviderId>(props.provider);
   const [key, setKey] = useState("");
   const [baseUrl, setBaseUrl] = useState("https://api.deepseek.com");
   const [busy, setBusy] = useState(false);
   const [profileBusy, setProfileBusy] = useState(false);
+  const [reasoningPreferenceBusy, setReasoningPreferenceBusy] = useState(false);
+  const [personalizationBusy, setPersonalizationBusy] = useState(false);
+  const [personalizationTone, setPersonalizationTone] = useState<TonePreset>(props.personalization.tone);
+  const [customInstructions, setCustomInstructions] = useState(props.personalization.customInstructions);
   const [profileNickname, setProfileNickname] = useState(props.profile.nickname);
   const [profileAvatar, setProfileAvatar] = useState(props.profile.avatarDataUrl);
   const selectedProvider = props.providers.find((provider) => provider.id === selected);
+  const selectedTone = PERSONALIZATION_TONES.find((tone) => tone.id === personalizationTone) ?? PERSONALIZATION_TONES[0];
+  const customInstructionLength = unicodeLength(customInstructions);
+  const personalizationChanged = personalizationTone !== props.personalization.tone
+    || customInstructions.trim() !== props.personalization.customInstructions;
 
   const connect = async () => {
     setBusy(true);
@@ -1664,6 +1801,38 @@ function SettingsDialog(props: {
     }
   };
 
+  const changeShowReasoningProcess = async (value: boolean) => {
+    setReasoningPreferenceBusy(true);
+    try {
+      await props.onShowReasoningProcess(value);
+    } catch (error) {
+      props.onToast(cleanError(error instanceof Error ? error.message : String(error)), "error");
+    } finally {
+      setReasoningPreferenceBusy(false);
+    }
+  };
+
+  const changeCustomInstructions = (value: string) => {
+    setCustomInstructions(Array.from(value).slice(0, MAX_CUSTOM_INSTRUCTION_LENGTH).join(""));
+  };
+
+  const savePersonalization = async () => {
+    const nextPersonalization = {
+      tone: personalizationTone,
+      customInstructions: customInstructions.trim(),
+    } satisfies PersonalizationSettings;
+    setPersonalizationBusy(true);
+    try {
+      await props.onPersonalization(nextPersonalization);
+      setCustomInstructions(nextPersonalization.customInstructions);
+      props.onToast(t("settings.personalizationSaved"));
+    } catch (error) {
+      props.onToast(cleanError(error instanceof Error ? error.message : String(error)), "error");
+    } finally {
+      setPersonalizationBusy(false);
+    }
+  };
+
   return (
     <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) props.onClose(); }}>
       <div className="settings-dialog">
@@ -1671,6 +1840,7 @@ function SettingsDialog(props: {
         <aside>
           <div className="settings-title">{t("settings.title")}</div>
           <button className={section === "general" ? "active" : ""} onClick={() => setSection("general")}><Languages size={16} /> {t("settings.general")}</button>
+          <button className={section === "personalization" ? "active" : ""} onClick={() => setSection("personalization")}><Sparkles size={16} /> {t("settings.personalization")}</button>
           <button className={section === "models" ? "active" : ""} onClick={() => setSection("models")}><Bot size={16} /> {t("settings.models")}</button>
           <button className={section === "agent" ? "active" : ""} onClick={() => setSection("agent")}><TerminalSquare size={16} /> {t("settings.agent")}</button>
           <button className={section === "appearance" ? "active" : ""} onClick={() => setSection("appearance")}><Sun size={16} /> {t("settings.appearance")}</button>
@@ -1708,6 +1878,58 @@ function SettingsDialog(props: {
                 <option value="en">{t("settings.languageEnglish")}</option>
               </select>
             </label>
+            <label className="setting-row">
+              <span><strong>{t("settings.showReasoningProcess")}</strong><small>{t("settings.showReasoningProcessDescription")}</small></span>
+              <input
+                className="setting-switch"
+                type="checkbox"
+                role="switch"
+                checked={props.showReasoningProcess}
+                disabled={reasoningPreferenceBusy}
+                onChange={(event) => void changeShowReasoningProcess(event.target.checked)}
+              />
+            </label>
+          </>}
+          {section === "personalization" && <>
+            <h2>{t("settings.personalization")}</h2><p>{t("settings.personalizationDescription")}</p>
+            <label className="setting-row personalization-tone-row">
+              <span>
+                <strong>{t("settings.basicStyleAndTone")}</strong>
+                <small>{t("settings.basicStyleAndToneDescription")}</small>
+              </span>
+              <span className="personalization-tone-control">
+                <select value={personalizationTone} onChange={(event) => setPersonalizationTone(event.target.value as TonePreset)}>
+                  {PERSONALIZATION_TONES.map((tone) => <option key={tone.id} value={tone.id}>{t(tone.label)}</option>)}
+                </select>
+                <small>{t(selectedTone.description)}</small>
+              </span>
+            </label>
+            <div className="personalization-editor">
+              <div className="personalization-editor-heading">
+                <strong>{t("settings.customInstructions")}</strong>
+                <small>{t("settings.customInstructionsDescription")}</small>
+              </div>
+              <textarea
+                value={customInstructions}
+                placeholder={t("settings.customInstructionsPlaceholder")}
+                aria-label={t("settings.customInstructions")}
+                onChange={(event) => changeCustomInstructions(event.target.value)}
+              />
+              <div className="personalization-editor-meta">
+                <small>{t("settings.customInstructionsScope")}</small>
+                <span>{customInstructionLength} / {MAX_CUSTOM_INSTRUCTION_LENGTH}</span>
+              </div>
+              <div className="personalization-actions">
+                <button
+                  className="primary-button"
+                  disabled={personalizationBusy || !personalizationChanged}
+                  onClick={() => void savePersonalization()}
+                >
+                  {personalizationBusy && <LoaderCircle className="spin" size={14} />}
+                  {t("common.confirm")}
+                </button>
+              </div>
+            </div>
           </>}
           {section === "models" && <>
             <h2>{t("settings.modelsTitle")}</h2><p>{t("settings.credentialsDescription")}</p>
@@ -1951,10 +2173,11 @@ function SessionSearchDialog({
 }
 
 function InlineExtensionRequest({ request, onDone, onError }: { request: ExtensionUiRequest; onDone(): void; onError(message: string): void }) {
-  const { t } = useI18n();
+  const { locale, t } = useI18n();
   const [value, setValue] = useState(request.prefill ?? "");
   const [pendingResponse, setPendingResponse] = useState<string>();
   const plan = request.method === "confirm" ? parseStructuredPlan(request.message) : undefined;
+  const localizedRequest = localizeExtensionUiRequest(request, locale);
   const respond = async (response: Record<string, unknown>, action: string) => {
     if (pendingResponse) return;
     setPendingResponse(action);
@@ -1971,13 +2194,13 @@ function InlineExtensionRequest({ request, onDone, onError }: { request: Extensi
     <section className="inline-request" aria-live="polite">
       <div className="inline-request-icon">{plan ? <ListTodo size={16} /> : <TerminalSquare size={16} />}</div>
       <div className="inline-request-body">
-        <h3>{plan ? t("dialog.updatePlan") : request.title ?? (request.method === "confirm" ? t("dialog.approval") : t("dialog.chooseOption"))}</h3>
-        {plan ? <PlanTodoList plan={plan} /> : request.message && <p>{request.message}</p>}
+        <h3>{plan ? t("dialog.updatePlan") : localizedRequest.title ?? (request.method === "confirm" ? t("dialog.approval") : t("dialog.chooseOption"))}</h3>
+        {plan ? <PlanTodoList plan={plan} /> : localizedRequest.message && <p>{localizedRequest.message}</p>}
         {request.method === "select" && (
           <div className="approval-options">
-            {request.options?.map((option) => (
-              <button key={option} disabled={busy} onClick={() => void respond({ value: option }, `select:${option}`)}>
-                {option}{pendingResponse === `select:${option}` ? <LoaderCircle className="spin" size={14} /> : <ChevronRight size={14} />}
+            {localizedRequest.options.map((option) => (
+              <button key={option.value} disabled={busy} onClick={() => void respond({ value: option.value }, `select:${option.value}`)}>
+                <span>{option.label}</span>{pendingResponse === `select:${option.value}` ? <LoaderCircle className="spin" size={14} /> : <ChevronRight size={14} />}
               </button>
             ))}
           </div>

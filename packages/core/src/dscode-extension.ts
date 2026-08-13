@@ -42,6 +42,7 @@ import {
 import { discoverProjectCommands } from "./project-profile.js";
 import { registerDSCodeProjectTrust } from "./project-trust.js";
 import { defaultModelForProvider } from "./providers.js";
+import { composePersonalizedSystemPrompt, loadPersonalizationPrompt } from "./personalization.js";
 import type { DSCodeRuntimeOptions } from "./runtime-options.js";
 import { executeSandboxedCommand, sandboxDescription } from "./sandbox.js";
 import { registerSessionCommands } from "./session-commands.js";
@@ -276,7 +277,12 @@ export function createDSCodeExtension(options: DSCodeRuntimeOptions): InlineExte
       pi.on("before_agent_start", async (event) => {
         lastAgentFailed = false;
         const currentAccess = effectiveAccess();
-        const systemPrompt = `${event.systemPrompt}\n\n${engineeringInstructions(projectCommands, currentAccess)}`;
+        const personalizationPrompt = await loadPersonalizationPrompt(options.personalizationFile);
+        const systemPrompt = composePersonalizedSystemPrompt(
+          event.systemPrompt,
+          engineeringInstructions(projectCommands, currentAccess),
+          personalizationPrompt,
+        );
         if (permission !== "plan") return { systemPrompt };
         return {
           systemPrompt,

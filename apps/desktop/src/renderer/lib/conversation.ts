@@ -51,6 +51,8 @@ export interface TurnResponseEntry {
   streaming: boolean;
 }
 
+export type AssistantActivity = "thinking" | "tool";
+
 type JsonRecord = Record<string, unknown>;
 
 export function normalizeMessages(messages: unknown[]): ChatMessage[] {
@@ -84,7 +86,7 @@ export function groupConversation(messages: ChatMessage[]): ConversationGroup[] 
   return groups;
 }
 
-export function splitAssistantTurn(messages: ChatMessage[]): { work: TurnWorkEntry[]; responses: TurnResponseEntry[] } {
+export function splitAssistantTurn(messages: ChatMessage[], active = false): { work: TurnWorkEntry[]; responses: TurnResponseEntry[] } {
   let lastToolMessageIndex = -1;
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     if (messages[index]!.tools.length > 0) {
@@ -99,7 +101,7 @@ export function splitAssistantTurn(messages: ChatMessage[]): { work: TurnWorkEnt
     const textItems = message.work.filter((item): item is Extract<WorkItem, { type: "text" }> => item.type === "text");
     for (const item of message.work) {
       const key = `${message.id}:${item.id}`;
-      if (item.type === "text" && messageIndex > lastToolMessageIndex) {
+      if (!active && item.type === "text" && messageIndex > lastToolMessageIndex) {
         responses.push({ key, text: item.text, streaming: Boolean(message.streaming) });
       } else {
         work.push({ key, message, item });
@@ -108,7 +110,7 @@ export function splitAssistantTurn(messages: ChatMessage[]): { work: TurnWorkEnt
 
     if (textItems.length === 0 && message.text.trim()) {
       const key = `${message.id}:fallback-text`;
-      if (messageIndex > lastToolMessageIndex) {
+      if (!active && messageIndex > lastToolMessageIndex) {
         responses.push({ key, text: message.text, streaming: Boolean(message.streaming) });
       } else {
         work.push({ key, message, item: { type: "text", id: "fallback-text", text: message.text } });
@@ -119,6 +121,12 @@ export function splitAssistantTurn(messages: ChatMessage[]): { work: TurnWorkEnt
     if (index < responses.length - 1) response.streaming = false;
   });
   return { work, responses };
+}
+
+export function getAssistantActivity(messages: ChatMessage[]): AssistantActivity {
+  return messages.some((message) => message.tools.some((tool) => tool.status === "running"))
+    ? "tool"
+    : "thinking";
 }
 
 export function applyAgentEvent(messages: ChatMessage[], event: AgentEvent): ChatMessage[] {

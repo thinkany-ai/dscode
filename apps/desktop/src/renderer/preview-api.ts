@@ -40,6 +40,10 @@ export function createPreviewApi(): DesktopApi {
       setLanguage: async () => undefined,
       getProfile: async () => ({ nickname: "demo" }),
       setProfile: async () => undefined,
+      getShowReasoningProcess: async () => false,
+      setShowReasoningProcess: async () => undefined,
+      getPersonalization: async () => ({ tone: "default", customInstructions: "" }),
+      setPersonalization: async () => undefined,
     },
     workspace: {
       choose: async () => workspace,

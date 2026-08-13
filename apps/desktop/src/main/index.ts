@@ -40,7 +40,7 @@ import {
   unarchiveSession,
 } from "./session-index";
 import { AUTH_PROMPT_CANCEL_VALUE } from "../shared/types";
-import type { AgentStartOptions, AuthUiEvent, FilePreview, FilePreviewKind, LanguagePreference, ProviderStatus, UserProfile } from "../shared/types";
+import type { AgentStartOptions, AuthUiEvent, FilePreview, FilePreviewKind, LanguagePreference, PersonalizationSettings, ProviderStatus, UserProfile } from "../shared/types";
 
 let mainWindow: BrowserWindow | undefined;
 let agentHost: AgentHost | undefined;
@@ -65,6 +65,7 @@ const stableUserDataPath = userDataOverride
   ? path.resolve(userDataOverride)
   : path.join(app.getPath("appData"), "DSCode");
 const generalTasksPath = path.join(stableUserDataPath, "tasks");
+const appSettingsFile = path.join(stableUserDataPath, "app-settings.json");
 
 protocol.registerSchemesAsPrivileged([{
   scheme: "dscode-preview",
@@ -113,6 +114,7 @@ function createWindow(): void {
   agentHost = new AgentHost(
     (event) => mainWindow?.webContents.send("agent:event", event),
     (message) => mainWindow?.webContents.send("agent:error", message),
+    appSettingsFile,
   );
 
   mainWindow.once("ready-to-show", () => {
@@ -184,6 +186,10 @@ function registerIpc(): void {
   ipcMain.handle("settings:set-language", (_event, language: LanguagePreference) => appSettings.setLanguage(language));
   ipcMain.handle("settings:get-profile", () => appSettings.getProfile());
   ipcMain.handle("settings:set-profile", (_event, profile: UserProfile) => appSettings.setProfile(profile));
+  ipcMain.handle("settings:get-show-reasoning-process", () => appSettings.getShowReasoningProcess());
+  ipcMain.handle("settings:set-show-reasoning-process", (_event, value: boolean) => appSettings.setShowReasoningProcess(value));
+  ipcMain.handle("settings:get-personalization", () => appSettings.getPersonalization());
+  ipcMain.handle("settings:set-personalization", (_event, personalization: PersonalizationSettings) => appSettings.setPersonalization(personalization));
 
   ipcMain.handle("workspace:choose", async () => {
     const result = await dialog.showOpenDialog(mainWindow!, {
@@ -391,7 +397,7 @@ app.whenReady().then(async () => {
   await initializeDSCodeHome();
   await migrateDesktopData();
   recentWorkspaces = new RecentWorkspaces(path.join(app.getPath("userData"), "recent-workspaces.json"));
-  appSettings = new AppSettings(path.join(app.getPath("userData"), "app-settings.json"));
+  appSettings = new AppSettings(appSettingsFile);
   installFilePreviewProtocol();
   registerIpc();
   installMenu();
