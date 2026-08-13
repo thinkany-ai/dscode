@@ -4,7 +4,10 @@
   "version": "0.1.0",
   "private": true,
   "description": "Native-feeling desktop client for DSCode",
-  "author": "ThinkAny",
+  "author": {
+    "name": "ThinkAny",
+    "email": "me@idoubi.cc"
+  },
   "license": "MIT",
   "repository": {
     "type": "git",

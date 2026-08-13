@@ -17,6 +17,22 @@ pnpm desktop:dev
 The renderer supports a local browser preview with representative data when Electron's preload
 bridge is absent. The production application always uses the secure preload bridge.
 
+### Core dependency
+
+Desktop declares `@thinkany/dscode-core` as `workspace:*`, so development and CI always use the Core
+source in this repository instead of downloading a potentially different registry build. Desktop
+0.1.0 is built with Core 0.3.6, which is also the current npm `latest` release. The packaged
+application includes that Core build and does not require users to install Core or a system Node.js
+runtime separately.
+
+Before a Desktop release, update its npm dependencies and confirm that none are outdated:
+
+```bash
+pnpm --filter @thinkany/dscode-desktop update --latest
+pnpm outdated --filter @thinkany/dscode-desktop --format json
+pnpm desktop:check
+```
+
 ## Checks and packaging
 
 ```bash

@@ -283,6 +283,8 @@ await client.prompt("Review this repository");
 
 The normal `@thinkany/dscode` tarball embeds its matching Core build, so existing CLI installations do
 not add a registry-time dependency or change their command, configuration, and session behavior.
+The Desktop package uses the monorepo's `workspace:*` Core dependency and embeds the matching Core
+build in each installer, preventing source and npm versions from drifting during development.
 
 ## Build from source
 

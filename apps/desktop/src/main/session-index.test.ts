@@ -24,7 +24,7 @@ describe("session index", () => {
 
     await expect(readSessionSummary(file)).resolves.toMatchObject({
       id: "session-1",
-      cwd: "/tmp/project",
+      cwd: path.resolve("/tmp/project"),
       model: "deepseek-v4-flash",
       title: "Implement a polished desktop client",
       messageCount: 2,

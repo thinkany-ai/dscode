@@ -269,6 +269,8 @@ await client.prompt("检查这个仓库");
 
 普通 `@thinkany/dscode` tarball 会内嵌相同版本的 Core 构建，因此现有 CLI 安装不会新增运行时
 registry 依赖，也不会改变命令、配置或会话行为。
+桌面端通过 monorepo 的 `workspace:*` 直接依赖 Core，并把对应 Core 构建内置到安装包中，避免开发
+期间源码版本与 npm 版本发生漂移；用户无需另外安装 Core 或系统 Node.js。
 
 ## 从源码构建
 
