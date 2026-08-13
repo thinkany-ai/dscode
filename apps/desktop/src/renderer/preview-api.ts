@@ -97,7 +97,7 @@ export function createPreviewApi(): DesktopApi {
     auth: {
       status: async () => [{ id: "deepseek", name: "DeepSeek", configured: true, source: "stored", defaultModel: "deepseek-v4-flash" }],
       saveApiKey: async () => undefined,
-      login: async () => undefined,
+      login: async () => true,
       respond: async () => undefined,
       logout: async () => undefined,
       onEvent: () => () => undefined,

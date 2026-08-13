@@ -70,6 +70,7 @@ import type {
   UserProfile,
   WorkspaceItem,
 } from "../shared/types";
+import { AUTH_PROMPT_CANCEL_VALUE } from "../shared/types";
 import {
   applyAgentEvent,
   groupConversation,
@@ -83,7 +84,7 @@ import {
 } from "./lib/conversation";
 import { applyTheme } from "./lib/theme";
 import { useI18n } from "./lib/i18n";
-import { isAgentSessionClosedError } from "./lib/errors";
+import { isAgentSessionClosedError, isAuthPromptCancelledError } from "./lib/errors";
 import { isPreviewPathInWorkspace, previewPathsFromText } from "./lib/file-preview";
 import { parseStructuredPlan, type StructuredPlan } from "./lib/plan";
 
@@ -158,6 +159,7 @@ export default function App() {
   const [toast, setToast] = useState<{ message: string; type: "info" | "error" }>();
   const [uiRequest, setUiRequest] = useState<ExtensionUiRequest>();
   const [authEvent, setAuthEvent] = useState<AuthUiEvent>();
+  const authCancellationRef = useRef(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const threadLayoutRef = useRef<HTMLDivElement>(null);
@@ -242,11 +244,12 @@ export default function App() {
     sessionPath?: string,
     overrides?: { provider?: ProviderId; model?: string; effort?: string; permission?: PermissionMode; sandbox?: SandboxMode },
     projectPath?: string,
-    behavior?: { background?: boolean },
+    behavior?: { background?: boolean; providerStatuses?: ProviderStatus[] },
   ) => {
     const background = behavior?.background === true;
     const nextProvider = overrides?.provider ?? provider;
-    const status = providers.find((candidate) => candidate.id === nextProvider);
+    const providerStatuses = behavior?.providerStatuses ?? providers;
+    const status = providerStatuses.find((candidate) => candidate.id === nextProvider);
     setUiRequest(undefined);
     setActiveSession(sessionPath);
     activeCwdRef.current = cwd;
@@ -257,7 +260,7 @@ export default function App() {
       setPreviewError(undefined);
       setPreviewLoading(false);
     }
-    if (providers.length && !status?.configured) {
+    if (providerStatuses.length && !status?.configured) {
       setSettingsOpen(true);
       setToast({ message: t("status.connectProvider", { provider: status?.name ?? nextProvider }), type: "error" });
       return false;
@@ -724,7 +727,7 @@ export default function App() {
 
   return (
     <div className={`app-shell${sidebarOpen ? "" : " sidebar-is-collapsed"}${window.dscode.platform === "darwin" ? " platform-macos" : ""}`}>
-      <aside className={`sidebar ${sidebarOpen ? "" : "sidebar-collapsed"}`}>
+      <aside className={`sidebar ${sidebarOpen ? "" : "sidebar-collapsed"}`} inert={!sidebarOpen}>
         <div className="sidebar-titlebar">
           <div className="sidebar-product-title"><strong>DSCode</strong></div>
           <button
@@ -1049,7 +1052,23 @@ export default function App() {
           profile={profile}
           onClose={() => setSettingsOpen(false)}
           onRefresh={async () => setProviders(await window.dscode.auth.status())}
-          onProvider={(value) => { setProvider(value); setModel(providers.find((item) => item.id === value)?.defaultModel ?? model); }}
+          onConnected={async (value) => {
+            const nextProviders = await window.dscode.auth.status();
+            const connected = nextProviders.find((item) => item.id === value);
+            const nextModel = connected?.defaultModel ?? model;
+            const nextEffort = value === "deepseek" ? "max" : "medium";
+            setProviders(nextProviders);
+            setProvider(value);
+            setModel(nextModel);
+            setEffort(nextEffort);
+            await startAgent(
+              activeCwdRef.current,
+              activeSession,
+              { provider: value, model: nextModel, effort: nextEffort },
+              workspace,
+              { providerStatuses: nextProviders },
+            );
+          }}
           onPermission={setPermission}
           onSandbox={setSandbox}
           onTheme={(id) => void changeTheme(id)}
@@ -1057,6 +1076,12 @@ export default function App() {
           onProfile={async (nextProfile) => {
             await window.dscode.settings.setProfile(nextProfile);
             setProfile(nextProfile);
+          }}
+          onAuthStart={() => { authCancellationRef.current = false; }}
+          consumeAuthCancellation={() => {
+            const cancelled = authCancellationRef.current;
+            authCancellationRef.current = false;
+            return cancelled;
           }}
           onToast={(message, type = "info") => setToast({ message, type })}
         />
@@ -1077,7 +1102,7 @@ export default function App() {
           onNew={() => void createNewThread()}
         />
       )}
-      {authEvent?.kind === "prompt" && <AuthPromptDialog event={authEvent} onDone={() => setAuthEvent(undefined)} />}
+      {authEvent?.kind === "prompt" && <AuthPromptDialog event={authEvent} onDone={() => setAuthEvent(undefined)} onCancel={() => { authCancellationRef.current = true; setAuthEvent(undefined); }} />}
       {authEvent?.kind === "notice" && <AuthNotice event={authEvent} onClose={() => setAuthEvent(undefined)} />}
       {previewImage && <ImageLightbox image={previewImage} onClose={() => setPreviewImage(undefined)} />}
       {toast && <div className={`toast ${toast.type}`}><span>{toast.type === "error" ? <CircleAlert size={16} /> : <Check size={16} />}{toast.message}</span><button onClick={() => setToast(undefined)}><X size={14} /></button></div>}
@@ -1555,12 +1580,14 @@ function SettingsDialog(props: {
   profile: UserProfile;
   onClose(): void;
   onRefresh(): Promise<void>;
-  onProvider(value: ProviderId): void;
+  onConnected(value: ProviderId): Promise<void>;
   onPermission(value: PermissionMode): void;
   onSandbox(value: SandboxMode): void;
   onTheme(id: string | null): void;
   onRefreshThemes(): void;
   onProfile(profile: UserProfile): Promise<void>;
+  onAuthStart(): void;
+  consumeAuthCancellation(): boolean;
   onToast(message: string, type?: "info" | "error"): void;
 }) {
   const { language, setLanguage, t } = useI18n();
@@ -1578,16 +1605,18 @@ function SettingsDialog(props: {
     setBusy(true);
     try {
       if (selected === "openai-codex") {
-        await window.dscode.auth.login(selected);
+        props.onAuthStart();
+        const connected = await window.dscode.auth.login(selected);
+        if (props.consumeAuthCancellation() || !connected) return;
       } else {
         if (!key.trim()) throw new Error(t("settings.enterApiKey"));
         await window.dscode.auth.saveApiKey(selected, key, selected === "deepseek" ? baseUrl : undefined);
       }
-      props.onProvider(selected);
       setKey("");
-      await props.onRefresh();
+      await props.onConnected(selected);
       props.onToast(t("settings.providerConnected", { provider: selectedProvider?.name ?? selected }));
     } catch (error) {
+      if (props.consumeAuthCancellation() || isAuthPromptCancelledError(error)) return;
       props.onToast(cleanError(error instanceof Error ? error.message : String(error)), "error");
     } finally {
       setBusy(false);
@@ -1638,6 +1667,7 @@ function SettingsDialog(props: {
   return (
     <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) props.onClose(); }}>
       <div className="settings-dialog">
+        <button className="icon-button modal-close" onClick={props.onClose} aria-label={t("common.close")}><X size={17} /></button>
         <aside>
           <div className="settings-title">{t("settings.title")}</div>
           <button className={section === "general" ? "active" : ""} onClick={() => setSection("general")}><Languages size={16} /> {t("settings.general")}</button>
@@ -1647,7 +1677,6 @@ function SettingsDialog(props: {
           <button className={section === "about" ? "active" : ""} onClick={() => setSection("about")}><Info size={16} /> {t("settings.about")}</button>
         </aside>
         <section className="settings-content">
-          <button className="icon-button modal-close" onClick={props.onClose}><X size={17} /></button>
           {section === "general" && <>
             <h2>{t("settings.general")}</h2><p>{t("settings.generalDescription")}</p>
             <div className="profile-editor">
@@ -2014,17 +2043,54 @@ function PlanTodoList({ plan }: { plan: StructuredPlan }) {
   );
 }
 
-function AuthPromptDialog({ event, onDone }: { event: Extract<AuthUiEvent, { kind: "prompt" }>; onDone(): void }) {
+function AuthPromptDialog({ event, onDone, onCancel }: { event: Extract<AuthUiEvent, { kind: "prompt" }>; onDone(): void; onCancel(): void }) {
   const { t } = useI18n();
   const [value, setValue] = useState("");
-  const respond = async (answer: string) => { await window.dscode.auth.respond(event.id, answer); onDone(); };
-  return <div className="modal-backdrop"><div className="approval-dialog"><div className="approval-icon"><Bot size={19} /></div><h3>{event.prompt.message}</h3>{event.prompt.type === "select" ? <div className="approval-options">{event.prompt.options?.map((option) => <button key={option.id} onClick={() => void respond(option.id)}><span><strong>{option.label}</strong>{option.description && <small>{option.description}</small>}</span><ChevronRight size={14} /></button>)}</div> : <input type={event.prompt.type === "secret" ? "password" : "text"} autoFocus value={value} placeholder={event.prompt.placeholder} onChange={(input) => setValue(input.target.value)} onKeyDown={(key) => { if (key.key === "Enter") void respond(value); }} />}<div className="dialog-actions">{event.prompt.type !== "select" && <button className="primary-button" onClick={() => void respond(value)}>{t("common.continue")}</button>}</div></div></div>;
+  const respond = (answer: string, close = onDone) => {
+    close();
+    void window.dscode.auth.respond(event.id, answer).catch(() => undefined);
+  };
+  const cancel = () => respond(AUTH_PROMPT_CANCEL_VALUE, onCancel);
+  const isCodexMethodPrompt = event.prompt.type === "select"
+    && event.prompt.options?.some((option) => option.id === "browser")
+    && event.prompt.options.some((option) => option.id === "device_code");
+  const message = isCodexMethodPrompt
+    ? t("auth.codexLoginMethod")
+    : event.prompt.type === "manual_code"
+      ? t("auth.manualCodePrompt")
+      : event.prompt.message;
+  const optionText = (option: NonNullable<typeof event.prompt.options>[number]) => {
+    if (!isCodexMethodPrompt) return option;
+    if (option.id === "browser") return { ...option, label: t("auth.browserLogin"), description: t("auth.browserLoginDescription") };
+    if (option.id === "device_code") return { ...option, label: t("auth.deviceCodeLogin"), description: t("auth.deviceCodeLoginDescription") };
+    return option;
+  };
+  const closeOnBackdrop = (pointerEvent: ReactPointerEvent<HTMLDivElement>) => {
+    if (pointerEvent.target === pointerEvent.currentTarget) cancel();
+  };
+  return (
+    <div className="modal-backdrop" onPointerDown={closeOnBackdrop}>
+      <div className="approval-dialog auth-prompt-dialog" role="dialog" aria-modal="true" aria-labelledby={`auth-prompt-${event.id}`} onKeyDown={(key) => { if (key.key === "Escape") cancel(); }}>
+        <button className="icon-button auth-dialog-close" onClick={cancel} aria-label={t("auth.cancelSignIn")} title={t("auth.cancelSignIn")}><X size={17} /></button>
+        <div className="approval-icon"><Bot size={19} /></div>
+        <h3 id={`auth-prompt-${event.id}`}>{message}</h3>
+        {event.prompt.type === "select"
+          ? <div className="approval-options">{event.prompt.options?.map(optionText).map((option, index) => <button key={option.id} autoFocus={index === 0} onClick={() => respond(option.id)}><span><strong>{option.label}</strong>{option.description && <small>{option.description}</small>}</span><ChevronRight size={14} /></button>)}</div>
+          : <input type={event.prompt.type === "secret" ? "password" : "text"} autoFocus value={value} placeholder={event.prompt.placeholder} onChange={(input) => setValue(input.target.value)} onKeyDown={(key) => { if (key.key === "Enter") respond(value); }} />}
+        <div className="dialog-actions">
+          <button onClick={cancel}>{t("common.cancel")}</button>
+          {event.prompt.type !== "select" && <button className="primary-button" onClick={() => respond(value)}>{t("common.continue")}</button>}
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function AuthNotice({ event, onClose }: { event: Extract<AuthUiEvent, { kind: "notice" }>; onClose(): void }) {
   const { t } = useI18n();
   const notice = event.event;
-  return <div className="modal-backdrop"><div className="approval-dialog"><div className="approval-icon"><Bot size={19} /></div><h3>{notice.type === "device_code" ? t("auth.completeSignIn") : t("auth.continueInBrowser")}</h3><p>{notice.instructions ?? notice.message ?? t("auth.browserOpened")}</p>{notice.userCode && <div className="device-code">{notice.userCode}</div>}<div className="dialog-actions"><button className="primary-button" onClick={onClose}>{t("auth.done")}</button></div></div></div>;
+  const instructions = notice.type === "device_code" ? t("auth.deviceCodeInstructions") : t("auth.browserOpened");
+  return <div className="modal-backdrop"><div className="approval-dialog" role="dialog" aria-modal="true"><div className="approval-icon"><Bot size={19} /></div><h3>{notice.type === "device_code" ? t("auth.completeSignIn") : t("auth.continueInBrowser")}</h3><p>{instructions}</p>{notice.userCode && <div className="device-code">{notice.userCode}</div>}<div className="dialog-actions"><button className="primary-button" onClick={onClose}>{t("auth.done")}</button></div></div></div>;
 }
 
 function AttachmentMenu({ onChange }: { onChange(event: ChangeEvent<HTMLInputElement>): void }) {
@@ -2240,7 +2306,7 @@ function ModelPicker({
               </button>
               {activeProvider === providerId && (
                 <div
-                  className={`model-submenu${providerIndex >= modelGroups.length / 2 ? " align-up" : ""}`}
+                  className={`model-submenu${providerIndex >= Math.floor(modelGroups.length / 2) ? " align-up" : ""}`}
                   role="menu"
                   aria-label={`${providerId} models`}
                 >
