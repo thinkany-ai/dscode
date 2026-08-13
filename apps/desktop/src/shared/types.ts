@@ -8,6 +8,7 @@ export const PROVIDER_IDS = [
   "kimi-coding",
   "minimax",
   "xai",
+  "opencode-go",
 ] as const;
 
 export type ProviderId = (typeof PROVIDER_IDS)[number];

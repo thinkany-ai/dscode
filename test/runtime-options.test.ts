@@ -72,6 +72,26 @@ describe("parseRuntimeArgs", () => {
     );
   });
 
+  it("selects OpenCode Zen Go with the default kimi-k2.6 model", () => {
+    delete process.env.DSCODE_MODEL;
+    delete process.env.DSCODE_EFFORT;
+    const parsed = parseRuntimeArgs(["--provider", "opencode-go"]);
+    expect(parsed.options).toMatchObject({
+      providerId: "opencode-go",
+      modelId: "kimi-k2.6",
+    });
+    expect(parsed.piArgs).toEqual(
+      expect.arrayContaining([
+        "--provider",
+        "opencode-go",
+        "--model",
+        "kimi-k2.6",
+        "--thinking",
+        "medium",
+      ]),
+    );
+  });
+
   it("accepts friendly Kimi and Grok provider aliases", () => {
     const kimi = parseRuntimeArgs(["--provider", "kimi"]);
     expect(kimi.options).toMatchObject({

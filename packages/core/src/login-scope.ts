@@ -18,6 +18,7 @@ export const LOGIN_PROVIDER_CHOICES: ReadonlyArray<{
   { providerId: "kimi-coding", label: "Kimi — Kimi Code account or API key" },
   { providerId: "minimax", label: "MiniMax — API key" },
   { providerId: "xai", label: "xAI (Grok) — account or API key" },
+  { providerId: "opencode-go", label: "OpenCode Zen Go — API key" },
 ];
 
 const LOGIN_DESCRIPTIONS: Record<SupportedProviderId, string> = {
@@ -30,6 +31,7 @@ const LOGIN_DESCRIPTIONS: Record<SupportedProviderId, string> = {
   "kimi-coding": "Kimi Code account or API key",
   minimax: "API key",
   xai: "Grok/X account or API key",
+  "opencode-go": "API key",
 };
 
 export type DSCodeLoginRoute =

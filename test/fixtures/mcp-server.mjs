@@ -11,6 +11,7 @@ const credentialEnvironmentKeys = [
   "KIMI_API_KEY",
   "MINIMAX_API_KEY",
   "XAI_API_KEY",
+  "OPENCODE_API_KEY",
 ];
 
 const server = new McpServer({ name: "dscode-test", version: "1.0.0" });

@@ -19,6 +19,7 @@ describe("DSCode provider login", () => {
       "kimi-coding",
       "minimax",
       "xai",
+      "opencode-go",
     ]);
   });
 
@@ -32,6 +33,7 @@ describe("DSCode provider login", () => {
     "kimi-coding",
     "minimax",
     "xai",
+    "opencode-go",
   ] as const)(
     "allows the supported %s provider",
     (providerId) => {

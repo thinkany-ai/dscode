@@ -12,6 +12,7 @@ export const SUPPORTED_PROVIDER_IDS = [
   "kimi-coding",
   "minimax",
   "xai",
+  "opencode-go",
 ] as const;
 export type SupportedProviderId = (typeof SUPPORTED_PROVIDER_IDS)[number];
 
@@ -25,6 +26,7 @@ const DEFAULT_MODELS: Record<SupportedProviderId, string> = {
   "kimi-coding": "kimi-for-coding",
   minimax: "MiniMax-M2.7",
   xai: "grok-4.5",
+  "opencode-go": "kimi-k2.6",
 };
 
 const DEFAULT_EFFORTS: Record<SupportedProviderId, string> = {
@@ -37,6 +39,7 @@ const DEFAULT_EFFORTS: Record<SupportedProviderId, string> = {
   "kimi-coding": "medium",
   minimax: "medium",
   xai: "medium",
+  "opencode-go": "medium",
 };
 
 const PROVIDER_NAMES: Record<SupportedProviderId, string> = {
@@ -49,6 +52,7 @@ const PROVIDER_NAMES: Record<SupportedProviderId, string> = {
   "kimi-coding": "Kimi For Coding",
   minimax: "MiniMax",
   xai: "xAI (Grok)",
+  "opencode-go": "OpenCode Zen Go",
 };
 
 const PROVIDER_ENVIRONMENT_KEYS: Partial<Record<SupportedProviderId, string>> = {
@@ -60,6 +64,7 @@ const PROVIDER_ENVIRONMENT_KEYS: Partial<Record<SupportedProviderId, string>> = 
   "kimi-coding": "KIMI_API_KEY",
   minimax: "MINIMAX_API_KEY",
   xai: "XAI_API_KEY",
+  "opencode-go": "OPENCODE_API_KEY",
 };
 
 const PROVIDER_ALIASES: Readonly<Record<string, SupportedProviderId>> = {
@@ -76,6 +81,7 @@ export const MODEL_CREDENTIAL_ENV_KEYS = [
   "KIMI_API_KEY",
   "MINIMAX_API_KEY",
   "XAI_API_KEY",
+  "OPENCODE_API_KEY",
 ] as const;
 
 export interface StoredModelSelection {
