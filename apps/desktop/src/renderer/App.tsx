@@ -30,7 +30,7 @@ import {
   FolderOpen,
   Gauge,
   GitBranch,
-  Github,
+  GitFork,
   Globe2,
   ImagePlus,
   Info,
@@ -1763,7 +1763,7 @@ function SettingsDialog(props: {
                   <ExternalLink size={14} />
                 </button>
                 <button type="button" title={DSCODE_GITHUB_URL} onClick={() => void window.dscode.app.openExternal(DSCODE_GITHUB_URL)}>
-                  <span className="about-link-icon"><Github size={17} /></span>
+                  <span className="about-link-icon"><GitFork size={17} /></span>
                   <span><strong>{t("settings.githubRepository")}</strong><small>github.com/thinkany-ai/dscode</small></span>
                   <ExternalLink size={14} />
                 </button>
