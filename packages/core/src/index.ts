@@ -88,4 +88,12 @@ export {
   type ParsedRuntimeArgs,
   type SandboxMode,
 } from "./runtime-options.js";
+export {
+  PERSONALIZATION_TONE_IDS,
+  buildPersonalizationPrompt,
+  composePersonalizedSystemPrompt,
+  loadPersonalizationPrompt,
+  type PersonalizationPreferences,
+  type PersonalizationTone,
+} from "./personalization.js";
 export { DSCODE_VERSION } from "./version.js";

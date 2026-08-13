@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyAgentEvent, groupConversation, normalizeMessages, optimisticUserMessage, splitAssistantTurn } from "./conversation";
+import { applyAgentEvent, getAssistantActivity, groupConversation, normalizeMessages, optimisticUserMessage, splitAssistantTurn } from "./conversation";
 
 describe("conversation events", () => {
   it("normalizes assistant text, thinking, and tool calls", () => {
@@ -77,7 +77,10 @@ describe("conversation events", () => {
 
   it("correlates tool start and completion events", () => {
     let messages = applyAgentEvent([], { type: "tool_execution_start", toolCallId: "call-1", toolName: "apply_patch", args: {}, timestamp: 1_700_000_000_000 });
+    expect(getAssistantActivity(messages)).toBe("tool");
+
     messages = applyAgentEvent(messages, { type: "tool_execution_end", toolCallId: "call-1", toolName: "apply_patch", result: "patched", isError: false, timestamp: 1_700_000_002_000 });
+    expect(getAssistantActivity(messages)).toBe("thinking");
 
     expect(messages[0]?.tools).toHaveLength(1);
     expect(messages[0]?.tools[0]).toMatchObject({
@@ -88,6 +91,15 @@ describe("conversation events", () => {
       endedAt: 1_700_000_002_000,
     });
     expect(messages[0]?.work).toEqual([{ type: "tool", id: "tool-call-1", toolId: "call-1" }]);
+  });
+
+  it("keeps thinking as the active fallback between message segments", () => {
+    const messages = normalizeMessages([{
+      role: "assistant",
+      content: [{ type: "thinking", thinking: "Inspect the project" }],
+    }]);
+
+    expect(getAssistantActivity(messages)).toBe("thinking");
   });
 
   it("keeps reasoning and tools in their original content order", () => {
@@ -141,6 +153,28 @@ describe("conversation events", () => {
     const turn = splitAssistantTurn(messages);
     expect(turn.work.map((entry) => entry.item.type)).toEqual(["thinking", "tool", "thinking"]);
     expect(turn.responses.map((entry) => entry.text)).toEqual(["Here is the final answer."]);
+  });
+
+  it("keeps all streamed text inside work until the turn is settled", () => {
+    const messages = normalizeMessages([
+      { role: "assistant", content: [
+        { type: "thinking", thinking: "Inspect the file" },
+        { type: "text", text: "I’ll inspect the evidence first." },
+        { type: "toolCall", id: "call-1", name: "read_file", arguments: { path: "src/a.ts" } },
+      ] },
+      { role: "assistant", content: [
+        { type: "thinking", thinking: "Summarize the result" },
+        { type: "text", text: "Here is the final answer." },
+      ] },
+    ]);
+
+    const activeTurn = splitAssistantTurn(messages, true);
+    expect(activeTurn.responses).toEqual([]);
+    expect(activeTurn.work.map((entry) => entry.item.type)).toEqual(["thinking", "text", "tool", "thinking", "text"]);
+
+    const settledTurn = splitAssistantTurn(messages, false);
+    expect(settledTurn.work.map((entry) => entry.item.type)).toEqual(["thinking", "text", "tool", "thinking"]);
+    expect(settledTurn.responses.map((entry) => entry.text)).toEqual(["Here is the final answer."]);
   });
 
   it("starts a new assistant message after a completed tool instead of reordering it", () => {

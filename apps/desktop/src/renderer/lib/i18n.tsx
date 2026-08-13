@@ -8,6 +8,7 @@ import {
   type ReactNode,
 } from "react";
 import type { LanguagePreference } from "../../shared/types";
+import type { ExtensionUiRequest } from "../../shared/types";
 
 export type AppLocale = "en" | "zh-CN";
 
@@ -34,6 +35,7 @@ const en = {
   "common.allow": "Allow",
   "common.cancel": "Cancel",
   "common.close": "Close",
+  "common.confirm": "Confirm",
   "common.continue": "Continue",
   "common.deny": "Deny",
   "composer.attachImages": "Attach images",
@@ -67,7 +69,16 @@ const en = {
   "context.total": "Total tokens",
   "context.used": "used",
   "dialog.approval": "DSCode needs approval",
+  "dialog.allowCommandForSession": "Allow this command for this session",
+  "dialog.allowNetworkAccess": "Allow network access?",
+  "dialog.allowOnce": "Allow once",
+  "dialog.allowUnrestrictedHostAccess": "Allow unrestricted host access?",
   "dialog.chooseOption": "Choose an option",
+  "dialog.currentAccess": "Current: {access}",
+  "dialog.hostAccess": "host access",
+  "dialog.networkAccessLabel": "network",
+  "dialog.sandboxUnavailable": "sandbox unavailable",
+  "dialog.unavailable": "unavailable",
   "dialog.updatePlan": "Update this plan?",
   "empty.description": "DSCode reads your workspace, runs commands, and edits files with you in control.",
   "empty.noWorkspaceDescription": "This task is not connected to a project folder. Ask a question or choose a project below.",
@@ -135,6 +146,8 @@ const en = {
   "settings.builtIn": "Built-in",
   "settings.builtInThemes": "Built-in themes",
   "settings.builtInThemesDescription": "Included with DSCode",
+  "settings.basicStyleAndTone": "Basic style and tone",
+  "settings.basicStyleAndToneDescription": "Choose how DSCode phrases its replies without changing what it can do.",
   "settings.connected": "Connected",
   "settings.credentialRemoved": "Credential removed.",
   "settings.credentialsDescription": "Credentials stay on this Mac in the shared ~/.dscode store.",
@@ -166,6 +179,13 @@ const en = {
   "settings.readOnly": "Read only",
   "settings.refreshThemes": "Refresh themes",
   "settings.customThemes": "Custom themes",
+  "settings.customInstructions": "Custom instructions",
+  "settings.customInstructionsDescription": "Tell DSCode the rules and preferences you want it to follow in every conversation.",
+  "settings.customInstructionsPlaceholder": "For example: Start each answer with a concise conclusion, then provide the details.",
+  "settings.customInstructionsScope": "These instructions apply to all of your conversations.",
+  "settings.personalization": "Personalization",
+  "settings.personalizationDescription": "Customize how DSCode communicates with you across every task.",
+  "settings.personalizationSaved": "Personalization saved.",
   "settings.reportIssue": "Report an issue",
   "settings.removeAvatar": "Remove avatar",
   "settings.sandbox": "Sandbox",
@@ -173,7 +193,25 @@ const en = {
   "settings.saveCredential": "Save credential",
   "settings.saveProfile": "Save profile",
   "settings.signInChatGPT": "Sign in with ChatGPT",
+  "settings.showReasoningProcess": "Show reasoning process",
+  "settings.showReasoningProcessDescription": "Automatically expands model reasoning while DSCode works. When off, only status is shown by default and details remain available on demand.",
   "settings.title": "Settings",
+  "settings.toneCandid": "Candid",
+  "settings.toneCandidDescription": "Concise, direct, and respectful",
+  "settings.toneCynical": "Wry",
+  "settings.toneCynicalDescription": "Sharp and witty, never hurtful",
+  "settings.toneDefault": "Default",
+  "settings.toneDefaultDescription": "No specific style",
+  "settings.toneEfficient": "Efficient",
+  "settings.toneEfficientDescription": "Maximum information in minimum words",
+  "settings.toneFriendly": "Friendly",
+  "settings.toneFriendlyDescription": "Warm, approachable, and encouraging",
+  "settings.toneInspiring": "Guiding",
+  "settings.toneInspiringDescription": "Prompts reflection and teaches the reasoning",
+  "settings.toneProfessional": "Professional",
+  "settings.toneProfessionalDescription": "Clear, precise, and trustworthy",
+  "settings.toneQuirky": "Quirky",
+  "settings.toneQuirkyDescription": "Imaginative and good with analogies",
   "settings.usingEnvironment": "Using an environment variable.",
   "settings.usingStored": "Using a stored credential.",
   "settings.website": "Website",
@@ -224,16 +262,17 @@ const en = {
   "work.hideDetails": "Hide details for {tool}",
   "work.reasoning": "Reasoning",
   "work.showDetails": "Show details for {tool}",
+  "work.thinkingStatus": "Thinking",
   "work.toolEdited": "Edited {file}",
   "work.toolEditedFiles": "Edited files",
   "work.toolRanCommand": "Ran a command",
   "work.toolRead": "Read {file}",
   "work.toolReadFiles": "Read files",
   "work.toolSearched": "Searched the workspace",
+  "work.toolStatus": "Using a tool",
   "work.toolUpdatedPlan": "Updated the plan",
   "work.toolWrote": "Wrote {file}",
   "work.toolWroteFile": "Wrote a file",
-  "work.working": "Working",
 } as const;
 
 type TranslationKey = keyof typeof en;
@@ -261,6 +300,7 @@ const zhCN: Record<TranslationKey, string> = {
   "common.allow": "允许",
   "common.cancel": "取消",
   "common.close": "关闭",
+  "common.confirm": "确认",
   "common.continue": "继续",
   "common.deny": "拒绝",
   "composer.attachImages": "添加图片",
@@ -294,7 +334,16 @@ const zhCN: Record<TranslationKey, string> = {
   "context.total": "Token 总量",
   "context.used": "已使用",
   "dialog.approval": "DSCode 需要你的批准",
+  "dialog.allowCommandForSession": "本次会话中允许此命令",
+  "dialog.allowNetworkAccess": "允许访问网络吗？",
+  "dialog.allowOnce": "仅允许一次",
+  "dialog.allowUnrestrictedHostAccess": "允许不受限地访问本机吗？",
   "dialog.chooseOption": "请选择一个选项",
+  "dialog.currentAccess": "当前：{access}",
+  "dialog.hostAccess": "主机访问",
+  "dialog.networkAccessLabel": "网络",
+  "dialog.sandboxUnavailable": "沙盒不可用",
+  "dialog.unavailable": "不可用",
   "dialog.updatePlan": "更新这个计划？",
   "empty.description": "DSCode 可以读取工作区、运行命令和编辑文件，并始终由你掌控。",
   "empty.noWorkspaceDescription": "这个任务没有关联项目文件夹。你可以直接提问，也可以在下方选择项目。",
@@ -362,6 +411,8 @@ const zhCN: Record<TranslationKey, string> = {
   "settings.builtIn": "内置",
   "settings.builtInThemes": "内置主题",
   "settings.builtInThemesDescription": "随 DSCode 提供",
+  "settings.basicStyleAndTone": "基本风格和语调",
+  "settings.basicStyleAndToneDescription": "设置 DSCode 回复你的风格和语调，不会影响它的功能。",
   "settings.connected": "已连接",
   "settings.credentialRemoved": "凭据已移除。",
   "settings.credentialsDescription": "凭据保存在这台 Mac 上的共享 ~/.dscode 存储中。",
@@ -393,6 +444,13 @@ const zhCN: Record<TranslationKey, string> = {
   "settings.readOnly": "只读",
   "settings.refreshThemes": "刷新主题",
   "settings.customThemes": "自定义主题",
+  "settings.customInstructions": "自定义指令",
+  "settings.customInstructionsDescription": "告诉 DSCode 你希望它始终遵循的规则和偏好。",
+  "settings.customInstructionsPlaceholder": "例如：每次回答先给出简短结论，再展开后续内容。",
+  "settings.customInstructionsScope": "这些指令会应用于你的所有对话。",
+  "settings.personalization": "个性化",
+  "settings.personalizationDescription": "自定义 DSCode 在所有任务中与你沟通的方式。",
+  "settings.personalizationSaved": "个性化设置已保存。",
   "settings.reportIssue": "反馈问题",
   "settings.removeAvatar": "移除头像",
   "settings.sandbox": "沙盒",
@@ -400,7 +458,25 @@ const zhCN: Record<TranslationKey, string> = {
   "settings.saveCredential": "保存凭据",
   "settings.saveProfile": "保存资料",
   "settings.signInChatGPT": "使用 ChatGPT 登录",
+  "settings.showReasoningProcess": "显示思考过程",
+  "settings.showReasoningProcessDescription": "开启后自动展开模型推理；关闭后默认仅显示状态，仍可手动查看详情。",
   "settings.title": "设置",
+  "settings.toneCandid": "直言不讳",
+  "settings.toneCandidDescription": "简明扼要、直击要点，同时保持尊重",
+  "settings.toneCynical": "毒舌吐槽",
+  "settings.toneCynicalDescription": "犀利风趣，但绝不伤人",
+  "settings.toneDefault": "默认",
+  "settings.toneDefaultDescription": "不设定特定风格",
+  "settings.toneEfficient": "高效务实",
+  "settings.toneEfficientDescription": "最少文字、最大信息量",
+  "settings.toneFriendly": "亲和友善",
+  "settings.toneFriendlyDescription": "温暖、平易近人、鼓励支持",
+  "settings.toneInspiring": "启发引导",
+  "settings.toneInspiringDescription": "用提问引导思考、授人以渔",
+  "settings.toneProfessional": "专业严谨",
+  "settings.toneProfessionalDescription": "清晰、准确、值得信赖",
+  "settings.toneQuirky": "天马行空",
+  "settings.toneQuirkyDescription": "富有想象力、善用比喻类比",
   "settings.usingEnvironment": "正在使用环境变量中的凭据。",
   "settings.usingStored": "正在使用已保存的凭据。",
   "settings.website": "官网",
@@ -451,19 +527,71 @@ const zhCN: Record<TranslationKey, string> = {
   "work.hideDetails": "收起 {tool} 的详情",
   "work.reasoning": "推理",
   "work.showDetails": "展开 {tool} 的详情",
+  "work.thinkingStatus": "思考中",
   "work.toolEdited": "编辑了 {file}",
   "work.toolEditedFiles": "编辑了文件",
   "work.toolRanCommand": "运行了命令",
   "work.toolRead": "读取了 {file}",
   "work.toolReadFiles": "读取了文件",
   "work.toolSearched": "搜索了工作区",
+  "work.toolStatus": "工具执行中",
   "work.toolUpdatedPlan": "更新了计划",
   "work.toolWrote": "写入了 {file}",
   "work.toolWroteFile": "写入了文件",
-  "work.working": "工作中",
 };
 
 const messages: Record<AppLocale, Record<TranslationKey, string>> = { en, "zh-CN": zhCN };
+
+function translate(locale: AppLocale, key: TranslationKey, variables?: Record<string, string | number>): string {
+  let value: string = messages[locale][key];
+  for (const [name, replacement] of Object.entries(variables ?? {})) {
+    value = value.replaceAll(`{${name}}`, String(replacement));
+  }
+  return value;
+}
+
+function localizeAccessDescription(description: string, locale: AppLocale): string {
+  if (locale === "en") return description;
+  return description
+    .replaceAll("sandbox unavailable", translate(locale, "dialog.sandboxUnavailable"))
+    .replaceAll("unavailable", translate(locale, "dialog.unavailable"))
+    .replaceAll("danger-full-access", translate(locale, "permission.full"))
+    .replaceAll("workspace-write", translate(locale, "settings.workspaceWrite"))
+    .replaceAll("read-only", translate(locale, "settings.readOnly"))
+    .replaceAll("host access", translate(locale, "dialog.hostAccess"))
+    .replaceAll("network", translate(locale, "dialog.networkAccessLabel"));
+}
+
+export function localizeExtensionUiRequest(request: ExtensionUiRequest, locale: AppLocale): {
+  title?: string;
+  message?: string;
+  options: Array<{ value: string; label: string }>;
+} {
+  const titleLines = request.title?.split("\n").map((line) => {
+    if (line === "Allow network access?") return translate(locale, "dialog.allowNetworkAccess");
+    if (line === "Allow unrestricted host access?") return translate(locale, "dialog.allowUnrestrictedHostAccess");
+    if (line.startsWith("Current: ")) {
+      return translate(locale, "dialog.currentAccess", {
+        access: localizeAccessDescription(line.slice("Current: ".length), locale),
+      });
+    }
+    return line;
+  });
+  const optionLabels: Record<string, TranslationKey> = {
+    "Allow once": "dialog.allowOnce",
+    "Allow this command for this session": "dialog.allowCommandForSession",
+    Deny: "common.deny",
+  };
+
+  return {
+    title: titleLines?.join("\n"),
+    message: request.message,
+    options: (request.options ?? []).map((value) => ({
+      value,
+      label: optionLabels[value] ? translate(locale, optionLabels[value]) : value,
+    })),
+  };
+}
 
 export function resolveLocale(preference: LanguagePreference, systemLanguage: string): AppLocale {
   if (preference !== "system") return preference;
@@ -515,13 +643,10 @@ export function I18nProvider({ children }: { children: ReactNode }) {
     }
   }, [language]);
 
-  const t = useCallback((key: TranslationKey, variables?: Record<string, string | number>) => {
-    let value: string = messages[locale][key];
-    for (const [name, replacement] of Object.entries(variables ?? {})) {
-      value = value.replaceAll(`{${name}}`, String(replacement));
-    }
-    return value;
-  }, [locale]);
+  const t = useCallback(
+    (key: TranslationKey, variables?: Record<string, string | number>) => translate(locale, key, variables),
+    [locale],
+  );
 
   const value = useMemo(() => ({ language, locale, setLanguage, t }), [language, locale, setLanguage, t]);
   return <I18nContext.Provider value={value}>{children}</I18nContext.Provider>;

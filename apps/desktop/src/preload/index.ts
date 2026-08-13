@@ -23,6 +23,10 @@ const api: DesktopApi & { onAppCommand(listener: (command: string) => void): () 
     setLanguage: (language) => ipcRenderer.invoke("settings:set-language", language),
     getProfile: () => ipcRenderer.invoke("settings:get-profile"),
     setProfile: (profile) => ipcRenderer.invoke("settings:set-profile", profile),
+    getShowReasoningProcess: () => ipcRenderer.invoke("settings:get-show-reasoning-process"),
+    setShowReasoningProcess: (value) => ipcRenderer.invoke("settings:set-show-reasoning-process", value),
+    getPersonalization: () => ipcRenderer.invoke("settings:get-personalization"),
+    setPersonalization: (personalization) => ipcRenderer.invoke("settings:set-personalization", personalization),
   },
   workspace: {
     choose: () => ipcRenderer.invoke("workspace:choose"),

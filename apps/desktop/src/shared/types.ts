@@ -18,6 +18,24 @@ export type PermissionMode = "plan" | "ask" | "auto" | "full";
 export type SandboxMode = "read-only" | "workspace-write" | "danger-full-access";
 export type LanguagePreference = "system" | "zh-CN" | "en";
 
+export const TONE_PRESETS = [
+  "default",
+  "professional",
+  "friendly",
+  "candid",
+  "quirky",
+  "efficient",
+  "cynical",
+  "inspiring",
+] as const;
+
+export type TonePreset = (typeof TONE_PRESETS)[number];
+
+export interface PersonalizationSettings {
+  tone: TonePreset;
+  customInstructions: string;
+}
+
 export interface UserProfile {
   nickname: string;
   avatarDataUrl?: string;
@@ -172,6 +190,10 @@ export interface DesktopApi {
     setLanguage(language: LanguagePreference): Promise<void>;
     getProfile(): Promise<UserProfile>;
     setProfile(profile: UserProfile): Promise<void>;
+    getShowReasoningProcess(): Promise<boolean>;
+    setShowReasoningProcess(value: boolean): Promise<void>;
+    getPersonalization(): Promise<PersonalizationSettings>;
+    setPersonalization(personalization: PersonalizationSettings): Promise<void>;
   };
   workspace: {
     choose(): Promise<string | null>;

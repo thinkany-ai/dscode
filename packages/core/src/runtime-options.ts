@@ -40,6 +40,7 @@ export interface DSCodeRuntimeOptions {
   webSearch: boolean;
   activeTools: string[];
   toolsExplicit: boolean;
+  personalizationFile?: string;
 }
 
 export interface ParsedRuntimeArgs {
@@ -74,6 +75,7 @@ export function parseRuntimeArgs(argv: string[]): ParsedRuntimeArgs {
   let webSearch = false;
   let activeTools: string[] | undefined;
   let toolsExplicit = false;
+  const personalizationFile = process.env.DSCODE_PERSONALIZATION_FILE?.trim();
   let help = false;
   let version = false;
   let yolo = false;
@@ -177,6 +179,7 @@ export function parseRuntimeArgs(argv: string[]): ParsedRuntimeArgs {
       webSearch,
       activeTools,
       toolsExplicit,
+      ...(personalizationFile ? { personalizationFile: path.resolve(personalizationFile) } : {}),
     },
     piArgs: forwarded,
     help,

@@ -18,6 +18,7 @@ export class AgentHost {
   constructor(
     private readonly emitEvent: (event: AgentEvent) => void,
     private readonly emitError: (message: string) => void,
+    private readonly personalizationFile?: string,
   ) {}
 
   async start(options: AgentStartOptions & { cwd: string }): Promise<AgentSnapshot> {
@@ -46,6 +47,7 @@ export class AgentHost {
         ELECTRON_RUN_AS_NODE: "1",
         PI_TELEMETRY: "0",
         PI_SKIP_VERSION_CHECK: "1",
+        ...(this.personalizationFile ? { DSCODE_PERSONALIZATION_FILE: this.personalizationFile } : {}),
       },
       stdio: ["pipe", "pipe", "pipe"],
     });
