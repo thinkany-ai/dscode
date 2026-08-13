@@ -4,6 +4,7 @@ import path from "node:path";
 import Fastify, {
   type FastifyBaseLogger,
   type FastifyInstance,
+  type FastifyLoggerOptions,
   type FastifyReply,
   type FastifyRequest,
 } from "fastify";
@@ -11,7 +12,10 @@ import {
   PersistedSessionAlreadyExistsError,
   PersistedSessionNotFoundError,
   createAgentSessionHost,
+  listPersistedSessions,
+  type PersistedSessionSummary,
 } from "./agent-session-host.js";
+import { toHttpSessionMessages, type AgentMessage } from "./session-messages.js";
 import {
   HttpUiResponseError,
   type HttpUiBroker,
@@ -24,12 +28,14 @@ import {
 
 export interface HttpAdapterServerHost {
   readonly session: {
+    readonly messages: readonly AgentMessage[];
     getLastAssistantText(): string | undefined;
   };
   readonly uiBroker: Pick<HttpUiBroker, "respond">;
   prompt(message: string): Promise<void>;
   abort(): Promise<void>;
   waitForIdle(): Promise<void>;
+  prunePersistedSession?(): boolean;
   subscribe(listener: HttpUiBrokerListener): () => void;
   dispose(): Promise<void>;
 }
@@ -37,6 +43,7 @@ export interface HttpAdapterServerHost {
 export interface HttpAdapterHostFactoryOptions {
   cwd: string;
   runtimeArgs?: readonly string[];
+  maxSessionFileBytes?: number;
   session:
     | { type: "persistent"; id: string }
     | { type: "resume"; id: string };
@@ -46,10 +53,15 @@ export type HttpAdapterHostFactory = (
   options: HttpAdapterHostFactoryOptions,
 ) => Promise<HttpAdapterServerHost>;
 
+export type PersistedSessionLister = (cwd: string) => Promise<PersistedSessionSummary[]>;
+
 export interface CreateHttpAdapterServerOptions {
   workspaces: Readonly<Record<string, string>>;
   runtimeArgs?: readonly string[];
+  maxSessionFileBytes?: number;
   createHost?: HttpAdapterHostFactory;
+  listPersistedSessions?: PersistedSessionLister;
+  logger?: boolean | FastifyLoggerOptions;
 }
 
 export type HttpSessionStatus = "idle" | "running" | "aborting";
@@ -60,6 +72,10 @@ export interface HttpSessionDescriptor {
   persisted: true;
   status: HttpSessionStatus;
 }
+
+export type HttpSessionListEntry =
+  | { workspaceId: string; active: true; session: HttpSessionDescriptor }
+  | { workspaceId: string; active: false; session: PersistedSessionSummary | null };
 
 export type HttpTurnStatus =
   | "running"
@@ -74,8 +90,15 @@ export type HttpAdapterEvent =
       turnId: string;
       status: HttpTurnStatus;
       output?: string | null;
+      error?: string;
+      message?: string;
+      clientId?: string;
     }
   | { type: "assistant_text_delta"; turnId: string | null; delta: string }
+  | { type: "thinking_start"; turnId: string | null }
+  | { type: "thinking_end"; turnId: string | null }
+  | { type: "compaction_start"; turnId: string | null }
+  | { type: "compaction_end"; turnId: string | null }
   | {
       type: "tool";
       turnId: string | null;
@@ -121,6 +144,7 @@ interface SessionParams {
 
 interface TurnBody {
   message: string;
+  clientId?: string;
 }
 
 interface TurnParams extends SessionParams {
@@ -146,6 +170,10 @@ interface ActiveTurn {
   abortAttempt?: Promise<AbortAttempt>;
 }
 
+function failureMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 const createSessionBodySchema = {
   type: "object",
   additionalProperties: false,
@@ -162,6 +190,7 @@ const turnBodySchema = {
   required: ["message"],
   properties: {
     message: { type: "string", minLength: 1 },
+    clientId: { type: "string", minLength: 1 },
   },
 } as const;
 
@@ -188,6 +217,8 @@ const uiResponseBodySchema = {
   ],
 } as const;
 
+const KEEPALIVE_INTERVAL_MS = 30_000;
+
 class SessionController {
   private readonly eventStreams = new Map<ServerResponse, () => void>();
   private activeTurn: ActiveTurn | undefined;
@@ -213,6 +244,10 @@ class SessionController {
           : "running"
         : "idle",
     };
+  }
+
+  get messages(): readonly AgentMessage[] {
+    return this.host.session.messages;
   }
 
   private closeEventStream(response: ServerResponse): void {
@@ -246,13 +281,21 @@ class SessionController {
   private publishTurn(
     turnId: string,
     status: HttpTurnStatus,
-    output?: string | null,
+    extras: {
+      output?: string | null;
+      error?: string;
+      message?: string;
+      clientId?: string;
+    } = {},
   ): void {
     const event: Extract<HttpAdapterEvent, { type: "turn" }> = {
       type: "turn",
       turnId,
       status,
-      ...(output !== undefined ? { output } : {}),
+      ...(extras.output !== undefined ? { output: extras.output } : {}),
+      ...(extras.error !== undefined ? { error: extras.error } : {}),
+      ...(extras.message !== undefined ? { message: extras.message } : {}),
+      ...(extras.clientId !== undefined ? { clientId: extras.clientId } : {}),
     };
     this.latestTurnEvent = event;
     this.publish(event);
@@ -281,15 +324,28 @@ class SessionController {
     }
 
     const event = brokerEvent.event;
-    if (
-      event.type === "message_update" &&
-      event.assistantMessageEvent.type === "text_delta"
-    ) {
-      return {
-        type: "assistant_text_delta",
-        turnId,
-        delta: event.assistantMessageEvent.delta,
-      };
+    if (event.type === "message_update") {
+      const messageEvent = event.assistantMessageEvent;
+      if (messageEvent.type === "text_delta") {
+        return {
+          type: "assistant_text_delta",
+          turnId,
+          delta: messageEvent.delta,
+        };
+      }
+      if (messageEvent.type === "thinking_start") {
+        return { type: "thinking_start", turnId };
+      }
+      if (messageEvent.type === "thinking_end") {
+        return { type: "thinking_end", turnId };
+      }
+      return undefined;
+    }
+    if (event.type === "compaction_start") {
+      return { type: "compaction_start", turnId };
+    }
+    if (event.type === "compaction_end") {
+      return { type: "compaction_end", turnId };
     }
     if (event.type === "tool_execution_start") {
       return {
@@ -341,7 +397,15 @@ class SessionController {
       const event = this.translateBrokerEvent(brokerEvent);
       if (event) this.writeEvent(response, event);
     });
-    this.eventStreams.set(response, unsubscribe);
+    const keepalive = setInterval(() => {
+      if (!response.destroyed && !response.writableEnded) {
+        response.write(": keepalive\n\n");
+      }
+    }, KEEPALIVE_INTERVAL_MS);
+    this.eventStreams.set(response, () => {
+      clearInterval(keepalive);
+      unsubscribe();
+    });
     response.once("close", () => this.closeEventStream(response));
     request.raw.once("error", () => this.closeEventStream(response));
     return reply;
@@ -349,13 +413,19 @@ class SessionController {
 
   startTurn(
     message: string,
+    clientId: string | undefined,
     log: FastifyBaseLogger,
   ): { id: string; status: "running" } | undefined {
     if (this.activeTurn) return undefined;
 
     const turn: ActiveTurn = { id: randomUUID() };
     this.activeTurn = turn;
-    this.publishTurn(turn.id, "running");
+    // The running event carries the submission so every attached client can render
+    // the user line; the submitter recognizes itself via clientId.
+    this.publishTurn(turn.id, "running", {
+      message,
+      ...(clientId !== undefined ? { clientId } : {}),
+    });
 
     void (async () => {
       let failed = false;
@@ -373,18 +443,23 @@ class SessionController {
         this.publishTurn(turn.id, "aborted");
       } else if (failed) {
         log.error({ err: failure, turnId: turn.id }, "Agent turn failed");
-        this.publishTurn(turn.id, "failed");
+        this.publishTurn(turn.id, "failed", { error: failureMessage(failure) });
       } else {
         try {
-          this.publishTurn(
-            turn.id,
-            "completed",
-            this.host.session.getLastAssistantText() ?? null,
-          );
+          this.publishTurn(turn.id, "completed", {
+            output: this.host.session.getLastAssistantText() ?? null,
+          });
         } catch (error) {
           log.error({ err: error, turnId: turn.id }, "Agent turn failed");
-          this.publishTurn(turn.id, "failed");
+          this.publishTurn(turn.id, "failed", { error: failureMessage(error) });
         }
+      }
+      // Prune before releasing activeTurn so no new turn can append to the file
+      // while it is being rewritten.
+      try {
+        this.host.prunePersistedSession?.();
+      } catch (error) {
+        log.error({ err: error, turnId: turn.id }, "Session file pruning failed");
       }
       if (this.activeTurn === turn) this.activeTurn = undefined;
     })();
@@ -418,6 +493,7 @@ class SessionController {
     log.error({ err: result.error, turnId: turn.id }, "Agent turn abort failed");
     if (this.activeTurn === turn && turn.abortAttempt === attempt) {
       delete turn.abortAttempt;
+      // No extras: re-sending the submission would make clients re-render it.
       this.publishTurn(turn.id, "running");
     }
     return "failed";
@@ -453,6 +529,7 @@ export function createHttpAdapterServer(
   options: CreateHttpAdapterServerOptions,
 ): FastifyInstance {
   const server = Fastify({
+    logger: options.logger ?? false,
     ajv: {
       customOptions: {
         coerceTypes: false,
@@ -470,14 +547,42 @@ export function createHttpAdapterServer(
   const createHost: HttpAdapterHostFactory =
     options.createHost ??
     ((hostOptions) => createAgentSessionHost(hostOptions));
+  const listSessions: PersistedSessionLister =
+    options.listPersistedSessions ?? listPersistedSessions;
   const sessions = new Map<string, SessionController>();
   const disposingSessions = new Map<string, SessionController>();
   const activatingSessions = new Set<string>();
+  const activatingWorkspaces = new Set<string>();
 
   const getSession = (sessionId: string): SessionController | undefined =>
     sessions.get(sessionId);
 
   server.get("/health", async () => ({ status: "ok" }));
+
+  server.get("/v1/sessions", async (request, reply) => {
+    const entries: HttpSessionListEntry[] = [];
+    for (const [workspaceId, cwd] of workspaces) {
+      const active = [...sessions.values(), ...disposingSessions.values()].find(
+        (controller) => controller.workspaceId === workspaceId,
+      );
+      if (active) {
+        entries.push({ workspaceId, active: true, session: active.descriptor });
+        continue;
+      }
+      let summaries: PersistedSessionSummary[];
+      try {
+        summaries = await listSessions(cwd);
+      } catch (error) {
+        request.log.error(
+          { err: error, workspaceId },
+          "Persisted session listing failed",
+        );
+        return reply.code(500).send({ error: "session_list_failed" });
+      }
+      entries.push({ workspaceId, active: false, session: summaries[0] ?? null });
+    }
+    return { sessions: entries };
+  });
 
   server.post<{ Body: CreateSessionBody }>(
     "/v1/sessions",
@@ -512,7 +617,17 @@ export function createHttpAdapterServer(
         return reply.code(409).send({ error: "session_already_active" });
       }
 
+      const workspaceOccupied =
+        activatingWorkspaces.has(workspaceId) ||
+        [...sessions.values(), ...disposingSessions.values()].some(
+          (controller) => controller.workspaceId === workspaceId,
+        );
+      if (workspaceOccupied) {
+        return reply.code(409).send({ error: "workspace_session_active" });
+      }
+
       activatingSessions.add(sessionId);
+      activatingWorkspaces.add(workspaceId);
       try {
         const session: HttpAdapterHostFactoryOptions["session"] = resumed
           ? { type: "resume", id: sessionId }
@@ -522,6 +637,9 @@ export function createHttpAdapterServer(
           session,
           ...(options.runtimeArgs !== undefined
             ? { runtimeArgs: options.runtimeArgs }
+            : {}),
+          ...(options.maxSessionFileBytes !== undefined
+            ? { maxSessionFileBytes: options.maxSessionFileBytes }
             : {}),
         });
         const controller = new SessionController(sessionId, workspaceId, host);
@@ -546,6 +664,7 @@ export function createHttpAdapterServer(
         return reply.code(500).send({ error: "session_creation_failed" });
       } finally {
         activatingSessions.delete(sessionId);
+        activatingWorkspaces.delete(workspaceId);
       }
     },
   );
@@ -558,6 +677,17 @@ export function createHttpAdapterServer(
         return reply.code(404).send({ error: "session_not_found" });
       }
       return controller.descriptor;
+    },
+  );
+
+  server.get<{ Params: SessionParams }>(
+    "/v1/sessions/:sessionId/messages",
+    async (request, reply) => {
+      const controller = getSession(request.params.sessionId);
+      if (!controller) {
+        return reply.code(404).send({ error: "session_not_found" });
+      }
+      return { messages: toHttpSessionMessages(controller.messages) };
     },
   );
 
@@ -611,7 +741,11 @@ export function createHttpAdapterServer(
         return reply.code(400).send({ error: "invalid_message" });
       }
 
-      const turn = controller.startTurn(request.body.message, request.log);
+      const turn = controller.startTurn(
+        request.body.message,
+        request.body.clientId,
+        request.log,
+      );
       if (!turn) return reply.code(409).send({ error: "turn_in_progress" });
       return reply.code(202).send(turn);
     },

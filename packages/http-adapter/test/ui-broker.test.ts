@@ -81,6 +81,48 @@ describe("createHttpUiBroker", () => {
     await expect(confirmation).resolves.toBe(false);
   });
 
+  it("cancels pending requests without disposing the broker", async () => {
+    const broker = createHttpUiBroker();
+    broker.attachBaseContext(fallback);
+    broker.uiContext.setStatus("agent", "busy");
+    const requestIds: string[] = [];
+    broker.subscribe((event) => {
+      if (event.type === "ui_request") requestIds.push(event.request.id);
+    });
+
+    const confirmation = broker.uiContext.confirm("Run destructive command?", "rm -rf build");
+    const selection = broker.uiContext.select("Database", ["SQLite", "PostgreSQL"]);
+    broker.cancelPending();
+    await expect(confirmation).resolves.toBe(false);
+    await expect(selection).resolves.toBeUndefined();
+
+    for (const requestId of requestIds) {
+      let responseError: unknown;
+      try {
+        broker.respond({ requestId, cancelled: true });
+      } catch (error) {
+        responseError = error;
+      }
+      expect(responseError).toBeInstanceOf(HttpUiResponseError);
+      expect(responseError).toMatchObject({ code: "not_found" });
+    }
+
+    // The broker stays operational: retained events replay and new requests resolve.
+    const events: HttpUiBrokerEvent[] = [];
+    broker.subscribe((event) => events.push(event));
+    expect(events).toEqual([
+      { type: "ui_event", event: { method: "status", key: "agent", text: "busy" } },
+    ]);
+    const next = broker.uiContext.confirm("Continue?", "Pending work");
+    const nextEvent = events.find((event) => event.type === "ui_request");
+    expect(nextEvent?.type).toBe("ui_request");
+    if (nextEvent?.type !== "ui_request") throw new Error("Missing UI request");
+    broker.respond({ requestId: nextEvent.request.id, confirmed: true });
+    await expect(next).resolves.toBe(true);
+
+    broker.dispose();
+  });
+
   it("replays current UI state and pending requests to new subscribers", async () => {
     const broker = createHttpUiBroker();
     broker.attachBaseContext(fallback);

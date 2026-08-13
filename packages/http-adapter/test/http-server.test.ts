@@ -8,7 +8,9 @@ import {
   type HttpAdapterEvent,
   type HttpAdapterHostFactoryOptions,
   type HttpAdapterServerHost,
+  type PersistedSessionLister,
 } from "../src/http-server.js";
+import type { AgentMessage } from "../src/session-messages.js";
 import {
   createHttpUiBroker,
   type HttpUiBroker,
@@ -21,6 +23,7 @@ interface FakeHost extends HttpAdapterServerHost {
   disposeCount: number;
   subscribeCount: number;
   unsubscribeCount: number;
+  pruneCalls: number;
   uiBroker: HttpUiBroker;
 }
 
@@ -63,6 +66,7 @@ function deferred(): {
 
 function createFakeHost(options?: {
   output?: string;
+  messages?: readonly AgentMessage[];
   prompt?: (message: string) => Promise<void>;
   waitForIdle?: () => Promise<void>;
   abort?: () => Promise<void>;
@@ -76,8 +80,10 @@ function createFakeHost(options?: {
     disposeCount: 0,
     subscribeCount: 0,
     unsubscribeCount: 0,
+    pruneCalls: 0,
     uiBroker: broker,
     session: {
+      messages: options?.messages ?? [],
       getLastAssistantText() {
         host.calls.push("output");
         return options?.output;
@@ -94,6 +100,10 @@ function createFakeHost(options?: {
     async abort() {
       host.abortCount += 1;
       await options?.abort?.();
+    },
+    prunePersistedSession() {
+      host.pruneCalls += 1;
+      return false;
     },
     subscribe(listener: HttpUiBrokerListener) {
       host.subscribeCount += 1;
@@ -122,6 +132,7 @@ function createHarness(options?: {
   factory?: (factoryOptions: HttpAdapterHostFactoryOptions) => Promise<FakeHost>;
   runtimeArgs?: readonly string[];
   workspaces?: Readonly<Record<string, string>>;
+  listPersistedSessions?: PersistedSessionLister;
 }): Harness {
   const hosts = new Map<string, FakeHost>();
   const factoryCalls: HttpAdapterHostFactoryOptions[] = [];
@@ -129,6 +140,9 @@ function createHarness(options?: {
     workspaces: options?.workspaces ?? WORKSPACES,
     ...(options?.runtimeArgs !== undefined
       ? { runtimeArgs: options.runtimeArgs }
+      : {}),
+    ...(options?.listPersistedSessions !== undefined
+      ? { listPersistedSessions: options.listPersistedSessions }
       : {}),
     createHost: async (factoryOptions) => {
       factoryCalls.push(factoryOptions);
@@ -311,6 +325,7 @@ describe("createHttpAdapterServer", () => {
 
     for (const request of [
       { method: "GET" as const, url: "/v1/sessions/missing" },
+      { method: "GET" as const, url: "/v1/sessions/missing/messages" },
       { method: "GET" as const, url: "/v1/sessions/missing/events" },
       {
         method: "POST" as const,
@@ -415,6 +430,237 @@ describe("createHttpAdapterServer", () => {
     expect((await first).statusCode).toBe(201);
   });
 
+  it("allows at most one active session per workspace", async () => {
+    const harness = createHarness();
+    const first = await harness.server.inject({
+      method: "POST",
+      url: "/v1/sessions",
+      payload: { workspaceId: "main" },
+    });
+    expect(first.statusCode).toBe(201);
+
+    const duplicate = await harness.server.inject({
+      method: "POST",
+      url: "/v1/sessions",
+      payload: { workspaceId: "main" },
+    });
+    expect(duplicate.statusCode).toBe(409);
+    expect(duplicate.json()).toEqual({ error: "workspace_session_active" });
+
+    const elsewhere = await harness.server.inject({
+      method: "POST",
+      url: "/v1/sessions",
+      payload: { workspaceId: "other" },
+    });
+    expect(elsewhere.statusCode).toBe(201);
+  });
+
+  it("rejects resuming a different session into an occupied workspace", async () => {
+    const harness = createHarness();
+    await harness.createSession("main");
+
+    const resume = await harness.server.inject({
+      method: "POST",
+      url: "/v1/sessions",
+      payload: { workspaceId: "main", resumeSessionId: "saved-session" },
+    });
+    expect(resume.statusCode).toBe(409);
+    expect(resume.json()).toEqual({ error: "workspace_session_active" });
+    expect(harness.factoryCalls).toHaveLength(1);
+  });
+
+  it("keeps the workspace occupied until disposal finishes", async () => {
+    const disposeBlocked = deferred();
+    const harness = createHarness({
+      factory: async () =>
+        createFakeHost({ dispose: async () => disposeBlocked.promise }),
+    });
+    const sessionId = await harness.createSession("main");
+
+    const deletion = harness.server.inject({
+      method: "DELETE",
+      url: `/v1/sessions/${sessionId}`,
+    });
+    await vi.waitFor(() =>
+      expect(harness.hosts.get(sessionId)!.disposeCount).toBe(1),
+    );
+
+    const blocked = await harness.server.inject({
+      method: "POST",
+      url: "/v1/sessions",
+      payload: { workspaceId: "main" },
+    });
+    expect(blocked.statusCode).toBe(409);
+    expect(blocked.json()).toEqual({ error: "workspace_session_active" });
+
+    disposeBlocked.resolve();
+    expect((await deletion).statusCode).toBe(204);
+
+    const created = await harness.server.inject({
+      method: "POST",
+      url: "/v1/sessions",
+      payload: { workspaceId: "main" },
+    });
+    expect(created.statusCode).toBe(201);
+  });
+
+  it("rejects concurrent activation of the same workspace", async () => {
+    const blocked = deferred();
+    let started!: () => void;
+    const factoryStarted = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const harness = createHarness({
+      factory: async () => {
+        started();
+        await blocked.promise;
+        return createFakeHost();
+      },
+    });
+
+    const first = harness.server.inject({
+      method: "POST",
+      url: "/v1/sessions",
+      payload: { workspaceId: "main" },
+    });
+    await factoryStarted;
+    const second = await harness.server.inject({
+      method: "POST",
+      url: "/v1/sessions",
+      payload: { workspaceId: "main" },
+    });
+    expect(second.statusCode).toBe(409);
+    expect(second.json()).toEqual({ error: "workspace_session_active" });
+
+    blocked.resolve();
+    expect((await first).statusCode).toBe(201);
+  });
+
+  it("lists sessions with live status or the most recent resume target", async () => {
+    const mainSummary = {
+      id: "saved-main",
+      firstMessage: "Hello from main",
+      messageCount: 4,
+      modified: new Date("2026-08-04T12:00:00Z"),
+    };
+    const listCalls: string[] = [];
+    const harness = createHarness({
+      listPersistedSessions: async (cwd) => {
+        listCalls.push(cwd);
+        if (cwd === "/workspace/main") {
+          return [
+            mainSummary,
+            { ...mainSummary, id: "older-main", messageCount: 2 },
+          ];
+        }
+        return [];
+      },
+    });
+
+    const empty = await harness.server.inject({ method: "GET", url: "/v1/sessions" });
+    expect(empty.statusCode).toBe(200);
+    expect(empty.json()).toEqual({
+      sessions: [
+        { workspaceId: "main", active: false, session: { ...mainSummary, modified: "2026-08-04T12:00:00.000Z" } },
+        { workspaceId: "other", active: false, session: null },
+      ],
+    });
+    expect(listCalls).toEqual(["/workspace/main", "/workspace/other"]);
+
+    const sessionId = await harness.createSession("main");
+    const withActive = await harness.server.inject({ method: "GET", url: "/v1/sessions" });
+    expect(withActive.statusCode).toBe(200);
+    expect(withActive.json()).toEqual({
+      sessions: [
+        {
+          workspaceId: "main",
+          active: true,
+          session: { id: sessionId, workspaceId: "main", persisted: true, status: "idle" },
+        },
+        { workspaceId: "other", active: false, session: null },
+      ],
+    });
+    // The occupied workspace is served from live state, so only `other` is scanned again.
+    expect(listCalls).toEqual([
+      "/workspace/main",
+      "/workspace/other",
+      "/workspace/other",
+    ]);
+  });
+
+  it("reports session_list_failed when the persisted store scan fails", async () => {
+    const harness = createHarness({
+      listPersistedSessions: async () => {
+        throw new Error("store unavailable");
+      },
+    });
+    const listed = await harness.server.inject({ method: "GET", url: "/v1/sessions" });
+    expect(listed.statusCode).toBe(500);
+    expect(listed.json()).toEqual({ error: "session_list_failed" });
+  });
+
+  it("returns the mapped transcript of an active session", async () => {
+    const messages: AgentMessage[] = [
+      { role: "user", content: "Fix the login form", timestamp: 1 },
+      {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "hidden" },
+          { type: "text", text: "On it." },
+          { type: "toolCall", id: "call-1", name: "read", arguments: { path: "login.ts" } },
+        ],
+        api: "openai-completions",
+        provider: "openrouter",
+        model: "qwen3.7-plus",
+        usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+        stopReason: "stop",
+        timestamp: 2,
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call-1",
+        toolName: "read",
+        content: [
+          { type: "text", text: "file body" },
+          { type: "image", data: "aW1hZ2U=", mimeType: "image/png" },
+        ],
+        isError: false,
+        timestamp: 3,
+      },
+    ];
+    const harness = createHarness({
+      factory: async () => createFakeHost({ messages }),
+    });
+    const sessionId = await harness.createSession();
+
+    const fetched = await harness.server.inject({
+      method: "GET",
+      url: `/v1/sessions/${sessionId}/messages`,
+    });
+    expect(fetched.statusCode).toBe(200);
+    expect(fetched.json()).toEqual({
+      messages: [
+        { role: "user", timestamp: 1, content: [{ type: "text", text: "Fix the login form" }] },
+        {
+          role: "assistant",
+          timestamp: 2,
+          content: [
+            { type: "text", text: "On it." },
+            { type: "toolCall", id: "call-1", name: "read", arguments: { path: "login.ts" } },
+          ],
+        },
+        {
+          role: "toolResult",
+          timestamp: 3,
+          toolCallId: "call-1",
+          toolName: "read",
+          isError: false,
+          content: [{ type: "text", text: "file body" }],
+        },
+      ],
+    });
+  });
+
   it("runs turns independently across sessions", async () => {
     const blockers = new Map<string, ReturnType<typeof deferred>>();
     const harness = createHarness({
@@ -482,6 +728,44 @@ describe("createHttpAdapterServer", () => {
       "text/event-stream; charset=utf-8",
     );
     events.close();
+    await vi.waitFor(() => expect(host.pruneCalls).toBe(1));
+  });
+
+  it("broadcasts the submitted message with the client id", async () => {
+    const promptBlocked = deferred();
+    const harness = createHarness({
+      factory: async () =>
+        createFakeHost({ prompt: async () => promptBlocked.promise }),
+    });
+    const sessionId = await harness.createSession();
+    const firstEvents = await openEventStream(harness.server, sessionId);
+    const secondEvents = await openEventStream(harness.server, sessionId);
+
+    const accepted = await harness.server.inject({
+      method: "POST",
+      url: turnUrl(sessionId),
+      payload: { message: "Hello", clientId: "client-a" },
+    });
+    expect(accepted.statusCode).toBe(202);
+    const turnId = accepted.json<{ id: string }>().id;
+
+    const running = {
+      type: "turn",
+      turnId,
+      status: "running",
+      message: "Hello",
+      clientId: "client-a",
+    };
+    expect(await firstEvents.next()).toEqual(running);
+    expect(await secondEvents.next()).toEqual(running);
+
+    const lateEvents = await openEventStream(harness.server, sessionId);
+    expect(await lateEvents.next()).toEqual(running);
+
+    promptBlocked.resolve();
+    firstEvents.close();
+    secondEvents.close();
+    lateEvents.close();
   });
 
   it.each([
@@ -526,6 +810,7 @@ describe("createHttpAdapterServer", () => {
       type: "turn",
       turnId: failedId,
       status: "failed",
+      error: "provider failed",
     });
     events.close();
 
@@ -605,6 +890,28 @@ describe("createHttpAdapterServer", () => {
       assistantMessageEvent: { type: "text_delta", delta: "Hello" },
     } as AgentSessionEvent);
     broker.publishSessionEvent({
+      type: "message_update",
+      assistantMessageEvent: { type: "thinking_start", contentIndex: 0 },
+    } as AgentSessionEvent);
+    broker.publishSessionEvent({
+      type: "message_update",
+      assistantMessageEvent: { type: "thinking_delta", delta: "internal" },
+    } as AgentSessionEvent);
+    broker.publishSessionEvent({
+      type: "message_update",
+      assistantMessageEvent: { type: "thinking_end", content: "internal" },
+    } as AgentSessionEvent);
+    broker.publishSessionEvent({
+      type: "compaction_start",
+      reason: "threshold",
+    } as AgentSessionEvent);
+    broker.publishSessionEvent({
+      type: "compaction_end",
+      reason: "threshold",
+      aborted: false,
+      willRetry: false,
+    } as AgentSessionEvent);
+    broker.publishSessionEvent({
       type: "tool_execution_start",
       toolCallId: "tool-1",
       toolName: "read",
@@ -620,6 +927,22 @@ describe("createHttpAdapterServer", () => {
     expect(await events.next()).toMatchObject({
       type: "assistant_text_delta",
       delta: "Hello",
+    });
+    expect(await events.next()).toMatchObject({
+      type: "thinking_start",
+      turnId: null,
+    });
+    expect(await events.next()).toMatchObject({
+      type: "thinking_end",
+      turnId: null,
+    });
+    expect(await events.next()).toMatchObject({
+      type: "compaction_start",
+      turnId: null,
+    });
+    expect(await events.next()).toMatchObject({
+      type: "compaction_end",
+      turnId: null,
     });
     expect(await events.next()).toMatchObject({
       type: "tool",
@@ -658,7 +981,12 @@ describe("createHttpAdapterServer", () => {
     });
     const turnId = accepted.json<{ id: string }>().id;
 
-    expect(await events.next()).toEqual({ type: "turn", turnId, status: "running" });
+    expect(await events.next()).toEqual({
+      type: "turn",
+      turnId,
+      status: "running",
+      message: "Apply the fix",
+    });
     const requestEvent = await events.next();
     if (requestEvent.type !== "ui_request") throw new Error("Missing UI request");
 
