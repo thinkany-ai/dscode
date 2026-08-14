@@ -35,6 +35,12 @@ export function getDSCodeArchivedSessionsDir(): string {
   );
 }
 
+export function getDSCodeTracesDir(): string {
+  return resolveHomePath(
+    process.env.DSCODE_TRACE_DIR ?? path.join(getDSCodeHome(), "traces"),
+  );
+}
+
 /** Configure the underlying runtime to use DSCode-owned paths only. */
 export async function initializeDSCodeHome(): Promise<string> {
   const home = getDSCodeHome();
@@ -51,6 +57,8 @@ export async function initializeDSCodeHome(): Promise<string> {
   await fs.chmod(sessions, 0o700).catch(() => undefined);
   await fs.mkdir(getDSCodeArchivedSessionsDir(), { recursive: true, mode: 0o700 });
   await fs.chmod(getDSCodeArchivedSessionsDir(), 0o700).catch(() => undefined);
+  await fs.mkdir(getDSCodeTracesDir(), { recursive: true, mode: 0o700 });
+  await fs.chmod(getDSCodeTracesDir(), 0o700).catch(() => undefined);
   await partitionExistingSessions(sessions);
   return home;
 }

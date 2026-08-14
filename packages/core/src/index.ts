@@ -41,6 +41,7 @@ export {
   getDSCodeArchivedSessionsDir,
   getDSCodeHome,
   getDSCodeSessionsDir,
+  getDSCodeTracesDir,
   initializeDSCodeHome,
   migrateLegacyDSCodeHome,
   partitionExistingSessions,
@@ -97,3 +98,39 @@ export {
   type PersonalizationTone,
 } from "./personalization.js";
 export { DSCODE_VERSION } from "./version.js";
+export {
+  AGENT_TRACE_SCHEMA_VERSION,
+  AgentRuntimeTrace,
+  classifyHttpStatus,
+  summarizeContent,
+  summarizeValue,
+  usageFromPiUsage,
+  type AgentRuntimeTraceOptions,
+  type AgentTraceError,
+  type AgentTraceEvent,
+  type AgentTraceEventInput,
+  type AgentTraceEventType,
+  type AgentTraceStatus,
+  type AgentTraceUsage,
+  type TraceContentSummary,
+  type TraceValueSummary,
+} from "./observability.js";
+export {
+  compareTraceReports,
+  formatReplayReport,
+  readTraceFile,
+  replayTraceLines,
+  summarizeTrace,
+  type TraceComparison,
+  type TraceCounts,
+  type TraceReplayReport,
+  type TraceUsageSummary,
+} from "./replay.js";
+export {
+  evaluateReplay,
+  evaluateTrace,
+  evaluateTraceLines,
+  formatEvaluationResult,
+  type EvaluationOptions,
+  type EvaluationResult,
+} from "./evaluation.js";

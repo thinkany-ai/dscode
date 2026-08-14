@@ -209,6 +209,8 @@ export function printDSCodeHelp(): void {
 
 Usage:
   dscode [options] [prompt]
+  dscode replay <trace.jsonl> [--json]
+  dscode evaluate <trace.jsonl> [--json] [budget options]
   dscode -p "task"                 Non-interactive text mode
   dscode --mode json -p "task"     JSONL/CI mode
   dscode --mode rpc                IDE/RPC server
@@ -237,6 +239,11 @@ Session and editor features:
 
 DSCode commands:
   /plan /permissions /effort /base-url /status /undo /checkpoints /diff /jobs /mcp /agents /doctor
+
+Runtime traces and evaluation:
+  dscode replay <file> --compare <candidate>  Compare two trace projections
+  --max-tool-calls <n> --max-duration-ms <n> --max-total-tokens <n> --max-cost <n>
+  --allow-errors                             Do not fail evaluation on runtime errors
 
 Authentication:
   dscode login [provider]           Sign in to a supported model provider

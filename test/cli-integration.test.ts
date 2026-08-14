@@ -1,10 +1,13 @@
+import fs from "node:fs/promises";
 import { spawn } from "node:child_process";
 import http from "node:http";
+import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 describe("DSCode Pi integration", () => {
   let server: http.Server | undefined;
+  let traceDir: string | undefined;
 
   afterEach(async () => {
     if (!server) return;
@@ -12,9 +15,12 @@ describe("DSCode Pi integration", () => {
       server!.close((error) => (error ? reject(error) : resolve())),
     );
     server = undefined;
+    if (traceDir) await fs.rm(traceDir, { recursive: true, force: true });
+    traceDir = undefined;
   });
 
   it("runs a JSONL turn through the DeepSeek Responses adapter", async () => {
+    traceDir = await fs.mkdtemp(path.join(os.tmpdir(), "dscode-cli-trace-"));
     let payload: Record<string, any> | undefined;
     server = http.createServer(async (request, response) => {
       const body: Buffer[] = [];
@@ -100,6 +106,7 @@ describe("DSCode Pi integration", () => {
         DEEPSEEK_API_KEY: "test-only-key",
         PI_SKIP_VERSION_CHECK: "1",
         PI_TELEMETRY: "0",
+        DSCODE_TRACE_DIR: traceDir,
       },
     );
 
@@ -115,9 +122,20 @@ describe("DSCode Pi integration", () => {
         expect.objectContaining({ type: "custom", name: "apply_patch" }),
       ]),
     );
+    const traceFiles = (await fs.readdir(traceDir)).filter((file) => file.endsWith(".jsonl"));
+    expect(traceFiles).toHaveLength(1);
+    const trace = await fs.readFile(path.join(traceDir, traceFiles[0]!), "utf8");
+    const events = trace
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as { type: string });
+    expect(events.map((event) => event.type)).toEqual(
+      expect.arrayContaining(["run_start", "model_request", "provider_response", "model_response", "run_end"]),
+    );
   }, 15_000);
 
   it("returns a non-zero CI exit code on provider failure", async () => {
+    traceDir = await fs.mkdtemp(path.join(os.tmpdir(), "dscode-cli-error-trace-"));
     server = http.createServer(async (_request, response) => {
       response.writeHead(401, { "content-type": "application/json" });
       response.end(JSON.stringify({ error: { message: "invalid test key" } }));
@@ -144,11 +162,24 @@ describe("DSCode Pi integration", () => {
         DEEPSEEK_API_KEY: "invalid-test-key",
         PI_SKIP_VERSION_CHECK: "1",
         PI_TELEMETRY: "0",
+        DSCODE_TRACE_DIR: traceDir,
       },
     );
 
     expect(execution.exitCode).not.toBe(0);
     expect(`${execution.stdout}\n${execution.stderr}`).toContain("invalid test key");
+    const traceFiles = (await fs.readdir(traceDir)).filter((file) => file.endsWith(".jsonl"));
+    expect(traceFiles).toHaveLength(1);
+    const traceLines = (await fs.readFile(path.join(traceDir, traceFiles[0]!), "utf8"))
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as { type: string; status?: string });
+    expect(traceLines).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: "error" }),
+        expect.objectContaining({ type: "run_end", status: "failed" }),
+      ]),
+    );
   }, 15_000);
 });
 
