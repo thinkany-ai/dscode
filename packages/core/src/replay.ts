@@ -46,6 +46,7 @@ export interface TraceReplayReport {
     unclosed: string[];
   };
   unmatchedToolCalls: string[];
+  toolNames: string[];
   missingRunEnds: string[];
   finalStatus?: AgentTraceStatus;
   violations: string[];
@@ -136,6 +137,7 @@ export function summarizeTrace(
   const closed = new Set<string>();
   const toolCalls = new Set<string>();
   const toolResults = new Set<string>();
+  const toolNames: string[] = [];
   const runStarts = new Set<string>();
   const runEnds = new Set<string>();
   let firstTimestamp: number | undefined;
@@ -171,6 +173,7 @@ export function summarizeTrace(
         break;
       case "tool_call":
         counts.toolCalls += 1;
+        if (event.toolName) toolNames.push(event.toolName);
         if (event.toolCallId) toolCalls.add(event.toolCallId);
         break;
       case "tool_result":
@@ -223,6 +226,7 @@ export function summarizeTrace(
     usage,
     spans: { total: starts.size + [...closed].filter((spanId) => !starts.has(spanId)).length, closed: closed.size, unclosed },
     unmatchedToolCalls,
+    toolNames,
     missingRunEnds,
     ...(finalStatus ? { finalStatus } : {}),
     violations,

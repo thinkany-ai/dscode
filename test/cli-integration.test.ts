@@ -4,6 +4,7 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { readAgentFixtureFile, writeAgentFixture } from "../packages/core/src/fixture.js";
 
 describe("DSCode Pi integration", () => {
   let server: http.Server | undefined;
@@ -21,6 +22,7 @@ describe("DSCode Pi integration", () => {
 
   it("runs a JSONL turn through the DeepSeek Responses adapter", async () => {
     traceDir = await fs.mkdtemp(path.join(os.tmpdir(), "dscode-cli-trace-"));
+    const fixturePath = path.join(traceDir, "recorded.json");
     let payload: Record<string, any> | undefined;
     server = http.createServer(async (request, response) => {
       const body: Buffer[] = [];
@@ -97,6 +99,8 @@ describe("DSCode Pi integration", () => {
         "--print",
         "--no-session",
         "--no-approve",
+        "--record-fixture",
+        fixturePath,
         "reply once",
       ],
       {
@@ -132,6 +136,12 @@ describe("DSCode Pi integration", () => {
     expect(events.map((event) => event.type)).toEqual(
       expect.arrayContaining(["run_start", "model_request", "provider_response", "model_response", "run_end"]),
     );
+    expect(await readAgentFixtureFile(fixturePath)).toMatchObject({
+      provider: "deepseek",
+      model: "deepseek-v4-flash",
+      responses: [{ content: [{ type: "text", text: "mock response" }], stopReason: "stop" }],
+    });
+    expect((await fs.stat(fixturePath)).mode & 0o777).toBe(0o600);
   }, 15_000);
 
   it("returns a non-zero CI exit code on provider failure", async () => {
@@ -181,6 +191,168 @@ describe("DSCode Pi integration", () => {
       ]),
     );
   }, 15_000);
+
+  it("executes a deterministic fixture through the real agent runtime", async () => {
+    const fixtureDir = await fs.mkdtemp(path.join(os.tmpdir(), "dscode-execute-fixture-"));
+    const fixturePath = path.join(fixtureDir, "case.json");
+    await writeAgentFixture(fixturePath, {
+      schemaVersion: 1,
+      kind: "dscode-agent-fixture",
+      provider: "deepseek",
+      model: "deepseek-v4-flash",
+      responses: [
+        { content: [{ type: "text", text: "fixture response" }], stopReason: "stop" },
+      ],
+      assertions: { finalStatus: "completed", modelResponses: 1 },
+    });
+    const execution = await spawnCapture(
+      process.execPath,
+      [
+        path.resolve("node_modules/tsx/dist/cli.mjs"),
+        "src/cli.ts",
+        "replay",
+        "--execute",
+        fixturePath,
+        "--prompt",
+        "reply once",
+        "--json",
+      ],
+      {
+        ...process.env,
+        DSCODE_TRACE: "0",
+        PI_SKIP_VERSION_CHECK: "1",
+        PI_TELEMETRY: "0",
+      },
+    );
+    await fs.rm(fixtureDir, { recursive: true, force: true });
+
+    expect(execution.exitCode, execution.stderr).toBe(0);
+    const result = JSON.parse(execution.stdout) as {
+      passed: boolean;
+      modelRequests: number;
+      modelResponses: number;
+      violations: string[];
+    };
+    expect(result).toMatchObject({
+      passed: true,
+      modelRequests: 1,
+      modelResponses: 1,
+      violations: [],
+    });
+  }, 15_000);
+
+  it("replays fixture tool calls through the real tool loop", async () => {
+    const fixtureDir = await fs.mkdtemp(path.join(os.tmpdir(), "dscode-tool-fixture-"));
+    const fixturePath = path.join(fixtureDir, "case.json");
+    await writeAgentFixture(fixturePath, {
+      schemaVersion: 1,
+      kind: "dscode-agent-fixture",
+      provider: "deepseek",
+      model: "deepseek-v4-flash",
+      responses: [
+        {
+          content: [
+            {
+              type: "toolCall",
+              id: "call-fixture-1",
+              name: "exec_command",
+              arguments: { cmd: "printf fixture-tool" },
+            },
+          ],
+          stopReason: "toolUse",
+        },
+        { content: [{ type: "text", text: "tool completed" }], stopReason: "stop" },
+      ],
+      assertions: {
+        finalStatus: "completed",
+        toolNames: ["exec_command"],
+        modelResponses: 2,
+      },
+    });
+    const execution = await spawnCapture(
+      process.execPath,
+      [
+        path.resolve("node_modules/tsx/dist/cli.mjs"),
+        "src/cli.ts",
+        "replay",
+        "--execute",
+        fixturePath,
+        "--prompt",
+        "run the fixture tool",
+        "--json",
+      ],
+      {
+        ...process.env,
+        DSCODE_TRACE: "0",
+        PI_SKIP_VERSION_CHECK: "1",
+        PI_TELEMETRY: "0",
+      },
+    );
+    await fs.rm(fixtureDir, { recursive: true, force: true });
+
+    expect(execution.exitCode, execution.stderr).toBe(0);
+    const result = JSON.parse(execution.stdout) as {
+      passed: boolean;
+      modelResponses: number;
+      violations: string[];
+    };
+    expect(result).toMatchObject({
+      passed: true,
+      modelResponses: 2,
+      violations: [],
+    });
+  }, 15_000);
+
+  it("allows an explicitly expected fixture error", async () => {
+    const fixtureDir = await fs.mkdtemp(path.join(os.tmpdir(), "dscode-error-fixture-"));
+    const fixturePath = path.join(fixtureDir, "case.json");
+    await writeAgentFixture(fixturePath, {
+      schemaVersion: 1,
+      kind: "dscode-agent-fixture",
+      provider: "deepseek",
+      model: "deepseek-v4-flash",
+      responses: [
+        { content: [], stopReason: "error", errorMessage: "fixture rate limit" },
+        { content: [], stopReason: "error", errorMessage: "fixture rate limit" },
+        { content: [], stopReason: "error", errorMessage: "fixture rate limit" },
+        { content: [], stopReason: "error", errorMessage: "fixture rate limit" },
+      ],
+      evaluation: { requireSuccessfulRun: false, failOnErrors: false },
+      assertions: { finalStatus: "failed", modelResponses: 4 },
+    });
+    const execution = await spawnCapture(
+      process.execPath,
+      [
+        path.resolve("node_modules/tsx/dist/cli.mjs"),
+        "src/cli.ts",
+        "replay",
+        "--execute",
+        fixturePath,
+        "--prompt",
+        "exercise the error path",
+        "--json",
+      ],
+      {
+        ...process.env,
+        DSCODE_TRACE: "0",
+        PI_SKIP_VERSION_CHECK: "1",
+        PI_TELEMETRY: "0",
+      },
+    );
+    await fs.rm(fixtureDir, { recursive: true, force: true });
+
+    expect(execution.exitCode, `${execution.stderr}\n${execution.stdout}`).toBe(0);
+    const result = JSON.parse(execution.stdout) as {
+      passed: boolean;
+      modelResponses: number;
+      violations: string[];
+    };
+    expect(result).toMatchObject({
+      passed: true,
+      modelResponses: 4,
+      violations: [],
+    });
+  }, 30_000);
 });
 
 function sendEvent(response: http.ServerResponse, event: Record<string, unknown>): void {

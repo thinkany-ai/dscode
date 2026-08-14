@@ -134,3 +134,19 @@ export {
   type EvaluationOptions,
   type EvaluationResult,
 } from "./evaluation.js";
+export {
+  AGENT_FIXTURE_KIND,
+  AGENT_FIXTURE_SCHEMA_VERSION,
+  AgentFixtureRecorder,
+  AgentFixtureReplay,
+  readAgentFixtureFile,
+  readAgentFixtureFileSync,
+  writeAgentFixture,
+  type AgentFixture,
+  type AgentFixtureAssertions,
+  type AgentFixtureEvaluation,
+  type AgentFixtureResponse,
+  type FixtureContentBlock,
+  type FixtureStopReason,
+  type FixtureUsage,
+} from "./fixture.js";

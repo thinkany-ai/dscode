@@ -31,6 +31,11 @@ import { partitionSessionFile } from "./home.js";
 import { ManagedProcessRegistry, type ManagedProcessResult } from "./managed-process.js";
 import { MCPManager } from "./mcp.js";
 import {
+  AgentFixtureRecorder,
+  AgentFixtureReplay,
+  readAgentFixtureFileSync,
+} from "./fixture.js";
+import {
   AgentRuntimeTrace,
   classifyHttpStatus,
   summarizeContent,
@@ -150,6 +155,12 @@ export function createDSCodeExtension(options: DSCodeRuntimeOptions): InlineExte
       let lastOfferedPlanRevision = 0;
       const access = new SessionAccessController(options.sandbox, options.network);
       const trace = new AgentRuntimeTrace();
+      const fixturePath = process.env.DSCODE_FIXTURE_PATH?.trim();
+      const fixture = fixturePath ? readAgentFixtureFileSync(fixturePath) : undefined;
+      const fixtureReplay = fixture ? new AgentFixtureReplay(fixture) : undefined;
+      const fixtureRecorder = options.fixtureCapturePath
+        ? new AgentFixtureRecorder(options.fixtureCapturePath, options.providerId, options.modelId)
+        : undefined;
       const pendingModelSpans: string[] = [];
       const pendingCompactionSpans: string[] = [];
       let traceSequence = 0;
@@ -184,7 +195,7 @@ export function createDSCodeExtension(options: DSCodeRuntimeOptions): InlineExte
         ctx.ui.setWidget("dscode-plan", planWidgetLines(planState, ctx));
       };
 
-      registerDeepSeekProvider(pi, options);
+      registerDeepSeekProvider(pi, options, fixtureReplay);
       registerLocalImageInput(pi);
       registerNaturalExit(pi);
       registerSessionCommands(pi);
@@ -319,12 +330,14 @@ export function createDSCodeExtension(options: DSCodeRuntimeOptions): InlineExte
 
       pi.on("agent_settled", async (_event, ctx) => {
         trace.endRun(lastAgentFailed ? "failed" : "completed");
+        await fixtureRecorder?.finish();
         await trace.flush();
         await queueSessionPartition(ctx);
       });
 
       pi.on("session_shutdown", async (_event, ctx) => {
         trace.shutdown("cancelled");
+        await fixtureRecorder?.finish();
         await trace.flush();
         await queueSessionPartition(ctx);
         processes.dispose();
@@ -516,6 +529,19 @@ export function createDSCodeExtension(options: DSCodeRuntimeOptions): InlineExte
         });
       });
 
+      pi.on("message_start", (event) => {
+        if (event.message.role !== "assistant" || pendingModelSpans.length > 0) return;
+        const spanId = nextTraceSpan("model");
+        pendingModelSpans.push(spanId);
+        trace.record({
+          type: "model_request",
+          spanId,
+          status: "started",
+          provider: event.message.provider,
+          model: event.message.model,
+        });
+      });
+
       pi.on("turn_start", (event) => {
         trace.record({
           type: "turn_start",
@@ -596,6 +622,7 @@ export function createDSCodeExtension(options: DSCodeRuntimeOptions): InlineExte
 
       pi.on("message_end", (event) => {
         if (event.message.role !== "assistant") return;
+        fixtureRecorder?.record(event.message);
         const modelSpanId = pendingModelSpans.shift() ?? nextTraceSpan("model-response");
         const stopReason =
           "stopReason" in event.message && typeof event.message.stopReason === "string"
@@ -979,8 +1006,16 @@ export function createDSCodeExtension(options: DSCodeRuntimeOptions): InlineExte
   };
 }
 
-function registerDeepSeekProvider(pi: ExtensionAPI, options: DSCodeRuntimeOptions): void {
-  const api = options.transport === "responses" ? "openai-responses" : "openai-completions";
+function registerDeepSeekProvider(
+  pi: ExtensionAPI,
+  options: DSCodeRuntimeOptions,
+  fixtureReplay?: AgentFixtureReplay,
+): void {
+  const api = fixtureReplay
+    ? "dscode-fixture"
+    : options.transport === "responses"
+      ? "openai-responses"
+      : "openai-completions";
   const models = [
     {
       id: "deepseek-v4-flash",
@@ -1009,9 +1044,11 @@ function registerDeepSeekProvider(pi: ExtensionAPI, options: DSCodeRuntimeOption
   pi.registerProvider("deepseek", {
     name: "DeepSeek",
     baseUrl: options.baseUrl,
-    apiKey: "$DEEPSEEK_API_KEY",
+    apiKey: fixtureReplay ? "dscode-fixture" : "$DEEPSEEK_API_KEY",
     api,
-    authHeader: true,
+    ...(fixtureReplay
+      ? { streamSimple: (model, context, streamOptions) => fixtureReplay.stream(model, context, streamOptions) }
+      : { authHeader: true }),
     models: models.map((model) => ({
       id: model.id,
       name: model.name,

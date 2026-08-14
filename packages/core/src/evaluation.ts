@@ -93,6 +93,7 @@ export function formatEvaluationResult(result: EvaluationResult, json = false): 
         passed: result.passed,
         turns: result.turns,
         modelRequests: result.modelRequests,
+        modelResponses: result.replay.counts.modelResponses,
         toolCalls: result.toolCalls,
         toolFailures: result.toolFailures,
         durationMs: result.durationMs,
@@ -111,7 +112,7 @@ export function formatEvaluationResult(result: EvaluationResult, json = false): 
   return [
     `Evaluation ${result.passed ? "PASSED" : "FAILED"}`,
     `turns       ${result.turns}`,
-    `models      ${result.modelRequests}`,
+    `models      ${result.modelRequests} request(s), ${result.replay.counts.modelResponses} response(s)`,
     `tools       ${result.toolCalls} (${result.toolFailures} failure(s))`,
     `duration    ${result.durationMs}ms`,
     `tokens      ${result.inputTokens} input · ${result.outputTokens} output · ${result.cacheReadTokens} cache read`,
