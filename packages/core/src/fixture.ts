@@ -142,9 +142,7 @@ export class AgentFixtureReplay {
         ? messageFromFixture(response, model)
         : errorMessage(model, "Fixture has no response for this model request");
       if (signal?.aborted) {
-        const aborted = { ...message, stopReason: "aborted" as const, errorMessage: "Request was aborted" };
-        stream.push({ type: "error", reason: "aborted", error: aborted });
-        stream.end(aborted);
+        endAborted(stream, model);
         return;
       }
       const partial: AssistantMessage = { ...message, content: [], stopReason: "pending" };
@@ -163,11 +161,27 @@ export class AgentFixtureReplay {
       stream.push({ type: "done", reason: message.stopReason, message });
       stream.end(message);
     } catch (error) {
+      if (signal?.aborted || isFixtureAbortError(error)) {
+        endAborted(stream, model);
+        return;
+      }
       const message = errorMessage(model, error instanceof Error ? error.message : String(error));
       stream.push({ type: "error", reason: "error", error: message });
       stream.end(message);
     }
   }
+}
+
+function endAborted(
+  stream: AssistantMessageEventStream,
+  model: Model<Api>,
+): void {
+  const aborted = {
+    ...errorMessage(model, "Request was aborted"),
+    stopReason: "aborted" as const,
+  };
+  stream.push({ type: "error", reason: "aborted", error: aborted });
+  stream.end(aborted);
 }
 
 export function readAgentFixtureFileSync(filePath: string): AgentFixture {
@@ -365,13 +379,31 @@ function isRecord(value: unknown): value is Record<string, any> {
 function delay(milliseconds: number, signal: AbortSignal | undefined): Promise<void> {
   return new Promise((resolve, reject) => {
     if (signal?.aborted) {
-      reject(new Error("Request was aborted"));
+      reject(new FixtureAbortError());
       return;
     }
-    const timer = setTimeout(resolve, milliseconds);
-    signal?.addEventListener("abort", () => {
-      clearTimeout(timer);
-      reject(new Error("Request was aborted"));
-    }, { once: true });
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const onAbort = () => {
+      if (timer !== undefined) clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+      reject(new FixtureAbortError());
+    };
+    timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, milliseconds);
+    signal?.addEventListener("abort", onAbort, { once: true });
+    if (signal?.aborted) onAbort();
   });
+}
+
+class FixtureAbortError extends Error {
+  constructor() {
+    super("Request was aborted");
+    this.name = "AbortError";
+  }
+}
+
+function isFixtureAbortError(error: unknown): boolean {
+  return error instanceof FixtureAbortError;
 }

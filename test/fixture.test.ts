@@ -110,4 +110,29 @@ describe("agent fixtures", () => {
     });
     expect(Date.now() - started).toBeGreaterThanOrEqual(1);
   });
+
+  it("preserves an abort raised while a response is delayed", async () => {
+    const fixture: AgentFixture = {
+      schemaVersion: AGENT_FIXTURE_SCHEMA_VERSION,
+      kind: AGENT_FIXTURE_KIND,
+      provider: "deepseek",
+      model: "deepseek-v4-flash",
+      responses: [
+        { content: [{ type: "text", text: "late" }], stopReason: "stop", delayMs: 50 },
+      ],
+    };
+    const replay = new AgentFixtureReplay(fixture);
+    const model = {
+      api: "dscode-fixture",
+      provider: "deepseek",
+      id: "deepseek-v4-flash",
+    } as Model<"dscode-fixture">;
+    const controller = new AbortController();
+    const stream = replay.stream(model, { messages: [] }, { signal: controller.signal });
+    queueMicrotask(() => controller.abort());
+    const events = [];
+    for await (const event of stream) events.push(event);
+    expect(events.at(-1)).toMatchObject({ type: "error", reason: "aborted" });
+    expect(await stream.result()).toMatchObject({ stopReason: "aborted" });
+  });
 });

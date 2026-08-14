@@ -112,6 +112,9 @@ function parseTraceCommand(argv: string[]): TraceCommand | undefined {
     }
     const [flag, inlineValue] = splitTraceFlag(argument);
     if (flag === "--execute") {
+      if (command !== "replay") {
+        throw new Error("--execute is only supported by replay");
+      }
       const value = inlineValue ?? argv[++index];
       if (!value) throw new Error("--execute requires a fixture file");
       execute = true;

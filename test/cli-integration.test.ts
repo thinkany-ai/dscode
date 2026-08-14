@@ -192,6 +192,28 @@ describe("DSCode Pi integration", () => {
     );
   }, 15_000);
 
+  it("rejects fixture execution on evaluate", async () => {
+    const execution = await spawnCapture(
+      process.execPath,
+      [
+        path.resolve("node_modules/tsx/dist/cli.mjs"),
+        "src/cli.ts",
+        "evaluate",
+        "--execute",
+        "ignored-fixture.json",
+        "--json",
+      ],
+      {
+        ...process.env,
+        PI_SKIP_VERSION_CHECK: "1",
+        PI_TELEMETRY: "0",
+      },
+    );
+
+    expect(execution.exitCode).not.toBe(0);
+    expect(execution.stderr).toContain("--execute is only supported by replay");
+  }, 15_000);
+
   it("executes a deterministic fixture through the real agent runtime", async () => {
     const fixtureDir = await fs.mkdtemp(path.join(os.tmpdir(), "dscode-execute-fixture-"));
     const fixturePath = path.join(fixtureDir, "case.json");
