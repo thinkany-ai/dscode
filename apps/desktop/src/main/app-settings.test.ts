@@ -23,11 +23,29 @@ describe("AppSettings", () => {
 
   it("persists language without replacing other settings", async () => {
     const settings = new AppSettings(file);
-    await settings.setThemeId("paper");
+    await settings.setThemePreference({ source: "custom", id: "paper" });
     await settings.setLanguage("zh-CN");
 
     expect(await settings.getLanguage()).toBe("zh-CN");
-    expect(await settings.getThemeId()).toBe("paper");
+    expect(await settings.getThemePreference()).toEqual({ source: "custom", id: "paper" });
+  });
+
+  it("defaults to following the system and migrates a legacy theme id", async () => {
+    const settings = new AppSettings(file);
+    expect(await settings.getThemePreference()).toEqual({ source: "system" });
+
+    await fs.writeFile(file, JSON.stringify({ themeId: "paper" }));
+    expect(await settings.getThemePreference()).toEqual({ source: "custom", id: "paper" });
+    expect(JSON.parse(await fs.readFile(file, "utf8"))).toEqual({ themePreference: { source: "custom", id: "paper" } });
+  });
+
+  it("persists builtin theme modes and rejects invalid preferences", async () => {
+    const settings = new AppSettings(file);
+    await settings.setThemePreference({ source: "builtin", mode: "dark" });
+    expect(await settings.getThemePreference()).toEqual({ source: "builtin", mode: "dark" });
+
+    await expect(settings.setThemePreference({ source: "builtin", mode: "sepia" } as never))
+      .rejects.toThrow("Unsupported theme preference");
   });
 
   it("falls back to system for an unknown stored value", async () => {
@@ -44,12 +62,12 @@ describe("AppSettings", () => {
 
   it("persists the reasoning process preference without replacing other settings", async () => {
     const settings = new AppSettings(file);
-    await settings.setThemeId("paper");
+    await settings.setThemePreference({ source: "custom", id: "paper" });
     await settings.setLanguage("zh-CN");
     await settings.setShowReasoningProcess(true);
 
     expect(await settings.getShowReasoningProcess()).toBe(true);
-    expect(await settings.getThemeId()).toBe("paper");
+    expect(await settings.getThemePreference()).toEqual({ source: "custom", id: "paper" });
     expect(await settings.getLanguage()).toBe("zh-CN");
   });
 
@@ -104,5 +122,12 @@ describe("AppSettings", () => {
     const settings = new AppSettings(file, "local-user");
     await expect(settings.setProfile({ nickname: "  " })).rejects.toThrow("Nickname is required");
     await expect(settings.setProfile({ nickname: "Trys", avatarDataUrl: "data:image/svg+xml;base64,PHN2Zy8+" })).rejects.toThrow("Unsupported avatar image");
+  });
+
+  it("persists the global model defaults consumed by the Weixin bot", async () => {
+    const settings = new AppSettings(file);
+    expect(await settings.getAgentDefaults()).toEqual({ provider: "deepseek", model: "deepseek-v4-flash", effort: "max" });
+    await settings.setAgentDefaults({ provider: "openai-codex", model: "gpt-5.6-sol", effort: "high" });
+    expect(await settings.getAgentDefaults()).toEqual({ provider: "openai-codex", model: "gpt-5.6-sol", effort: "high" });
   });
 });

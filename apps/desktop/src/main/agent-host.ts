@@ -8,12 +8,21 @@ interface PendingRequest {
   timeout: NodeJS.Timeout;
 }
 
+type HostStartOptions = Omit<AgentStartOptions, "permission"> & {
+  cwd: string;
+  permission: AgentStartOptions["permission"] | "trusted-workspace";
+  tools?: string[];
+  network?: boolean;
+  extraEnv?: Record<string, string>;
+};
+
 export class AgentHost {
   private child?: ChildProcessWithoutNullStreams;
   private buffer = "";
   private stderr = "";
   private requestId = 0;
   private pending = new Map<string, PendingRequest>();
+  private settledWaiters = new Set<{ resolve(): void; reject(error: Error): void; timer: NodeJS.Timeout }>();
 
   constructor(
     private readonly emitEvent: (event: AgentEvent) => void,
@@ -21,7 +30,7 @@ export class AgentHost {
     private readonly personalizationFile?: string,
   ) {}
 
-  async start(options: AgentStartOptions & { cwd: string }): Promise<AgentSnapshot> {
+  async start(options: HostStartOptions): Promise<AgentSnapshot> {
     await this.stop();
     const args = [
       getDSCodeRpcEntryPath(),
@@ -37,6 +46,8 @@ export class AgentHost {
     if (options.model) args.push("--model", options.model);
     if (options.effort) args.push("--effort", options.effort);
     if (options.sessionPath) args.push("--session", options.sessionPath);
+    if (options.network) args.push("--network");
+    if (options.tools) args.push("--tools", options.tools.join(","));
 
     this.buffer = "";
     this.stderr = "";
@@ -48,6 +59,7 @@ export class AgentHost {
         PI_TELEMETRY: "0",
         PI_SKIP_VERSION_CHECK: "1",
         ...(this.personalizationFile ? { DSCODE_PERSONALIZATION_FILE: this.personalizationFile } : {}),
+        ...options.extraEnv,
       },
       stdio: ["pipe", "pipe", "pipe"],
     });
@@ -92,6 +104,7 @@ export class AgentHost {
       pending.reject(new Error("Agent session closed"));
     }
     this.pending.clear();
+    for (const waiter of [...this.settledWaiters]) waiter.reject(new Error("Agent session closed"));
     if (child.exitCode !== null) return;
     child.kill("SIGTERM");
     await new Promise<void>((resolve) => {
@@ -115,7 +128,7 @@ export class AgentHost {
       const timeout = setTimeout(() => {
         this.pending.delete(id);
         reject(new Error(`DSCode did not respond to ${type}. ${this.stderr}`.trim()));
-      }, 45_000);
+      }, type === "compact" ? 10 * 60_000 : 45_000);
       this.pending.set(id, {
         resolve: (value) => resolve(value as T),
         reject,
@@ -129,6 +142,21 @@ export class AgentHost {
     const child = this.child;
     if (!child || child.stdin.destroyed) throw new Error("No workspace session is active");
     child.stdin.write(`${JSON.stringify({ type: "extension_ui_response", id, ...response })}\n`);
+  }
+
+  async waitForSettled(timeoutMs = 30 * 60_000): Promise<void> {
+    const state = await this.request<Record<string, unknown>>("get_state");
+    if (state.isStreaming !== true) return;
+    return new Promise<void>((resolve, reject) => {
+      const waiter = {
+        resolve: () => { clearTimeout(waiter.timer); this.settledWaiters.delete(waiter); resolve(); },
+        reject: (error: Error) => { clearTimeout(waiter.timer); this.settledWaiters.delete(waiter); reject(error); },
+        timer: setTimeout(() => undefined, timeoutMs),
+      };
+      clearTimeout(waiter.timer);
+      waiter.timer = setTimeout(() => waiter.reject(new Error("Agent turn timed out")), timeoutMs);
+      this.settledWaiters.add(waiter);
+    });
   }
 
   private handleChunk(chunk: Buffer): void {
@@ -158,6 +186,9 @@ export class AgentHost {
       else pending.resolve(data.data);
       return;
     }
+    if (data.type === "agent_settled") {
+      for (const waiter of [...this.settledWaiters]) waiter.resolve();
+    }
     if (typeof data.type === "string") this.emitEvent(data as AgentEvent);
   }
 
@@ -169,6 +200,7 @@ export class AgentHost {
       pending.reject(new Error(message));
     }
     this.pending.clear();
+    for (const waiter of [...this.settledWaiters]) waiter.reject(new Error(message));
     this.emitError(message);
   }
 }

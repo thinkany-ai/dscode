@@ -18,6 +18,7 @@ import {
   Bot,
   Check,
   ChevronDown,
+  ChevronLeft,
   ChevronRight,
   CircleAlert,
   CircleStop,
@@ -42,6 +43,8 @@ import {
   Menu,
   MessageSquareWarning,
   MessageSquareText,
+  Monitor,
+  Moon,
   Paperclip,
   PanelLeft,
   PanelRight,
@@ -68,10 +71,15 @@ import type {
   FilePreview,
   SandboxMode,
   SessionSummary,
+  ThemeBootstrap,
+  ThemeMode,
+  ThemePalette,
+  ThemePreference,
   ThemeSummary,
   TonePreset,
   UserProfile,
   WorkspaceItem,
+  WeixinBotStatus,
 } from "../shared/types";
 import { AUTH_PROMPT_CANCEL_VALUE } from "../shared/types";
 import {
@@ -86,12 +94,14 @@ import {
   type ToolActivity,
   type TurnWorkEntry,
 } from "./lib/conversation";
-import { applyTheme } from "./lib/theme";
+import { applyThemeBootstrap, getInitialThemeBootstrap } from "./lib/theme";
 import { localizeExtensionUiRequest, useI18n } from "./lib/i18n";
 import { isAgentSessionClosedError, isAuthPromptCancelledError } from "./lib/errors";
 import { isPreviewPathInWorkspace, previewPathsFromText } from "./lib/file-preview";
 import { parseStructuredPlan, type StructuredPlan } from "./lib/plan";
 import { updateConversationTailFollowing } from "./lib/conversation-scroll";
+import { chooseModelSubmenuSide, type ModelSubmenuSide } from "./lib/model-menu";
+import { WeixinBotView } from "./WeixinBotView";
 
 interface Attachment extends ChatImage {
   name: string;
@@ -137,6 +147,7 @@ function inspectorBoundsForLayout(layoutWidth: number) {
 
 export default function App() {
   const { locale, t } = useI18n();
+  const initialThemeBootstrap = getInitialThemeBootstrap();
   const [workspace, setWorkspace] = useState<string>();
   const [workspaces, setWorkspaces] = useState<WorkspaceItem[]>([]);
   const [expandedProjects, setExpandedProjects] = useState<Set<string>>(() => new Set());
@@ -146,8 +157,9 @@ export default function App() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [providers, setProviders] = useState<ProviderStatus[]>([]);
   const [provider, setProvider] = useState<ProviderId>("deepseek");
-  const [themes, setThemes] = useState<ThemeSummary[]>([]);
-  const [themeId, setThemeId] = useState<string | null>(null);
+  const [themes, setThemes] = useState<ThemeSummary[]>(initialThemeBootstrap.themes);
+  const [themePreference, setThemePreference] = useState<ThemePreference>(initialThemeBootstrap.preference);
+  const [resolvedThemeMode, setResolvedThemeMode] = useState<ThemeMode>(initialThemeBootstrap.resolvedMode);
   const [profile, setProfile] = useState<UserProfile>({ nickname: "User" });
   const [showReasoningProcess, setShowReasoningProcess] = useState(false);
   const [personalization, setPersonalization] = useState<PersonalizationSettings>({ tone: "default", customInstructions: "" });
@@ -181,6 +193,8 @@ export default function App() {
   const [toast, setToast] = useState<{ message: string; type: "info" | "error" }>();
   const [uiRequest, setUiRequest] = useState<ExtensionUiRequest>();
   const [authEvent, setAuthEvent] = useState<AuthUiEvent>();
+  const [activeView, setActiveView] = useState<"thread" | "weixin">("thread");
+  const [weixinStatus, setWeixinStatus] = useState<WeixinBotStatus>();
   const authCancellationRef = useRef(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -272,9 +286,11 @@ export default function App() {
   ) => {
     const background = behavior?.background === true;
     const nextProvider = overrides?.provider ?? provider;
+    const nextPermission = overrides?.permission ?? permission;
     const providerStatuses = behavior?.providerStatuses ?? providers;
     const status = providerStatuses.find((candidate) => candidate.id === nextProvider);
     setUiRequest(undefined);
+    setPermission(nextPermission);
     setActiveSession(sessionPath);
     activeCwdRef.current = cwd;
     setWorkspace(projectPath);
@@ -300,7 +316,7 @@ export default function App() {
         provider: nextProvider,
         model: overrides?.model ?? model,
         effort: overrides?.effort ?? effort,
-        permission: overrides?.permission ?? permission,
+        permission: nextPermission,
         sandbox: overrides?.sandbox ?? sandbox,
         ...(sessionPath ? { sessionPath } : {}),
       });
@@ -322,34 +338,32 @@ export default function App() {
   useEffect(() => {
     let cancelled = false;
     void (async () => {
-      const [recentItems, allSessions, providerItems, themeItems, activeThemeId, storedProfile, storedShowReasoningProcess, storedPersonalization] = await Promise.all([
+      const [recentItems, allSessions, providerItems, storedProfile, storedShowReasoningProcess, storedPersonalization, storedDefaults] = await Promise.all([
         window.dscode.workspace.recent(),
         window.dscode.sessions.list(),
         window.dscode.auth.status(),
-        window.dscode.themes.list(),
-        window.dscode.themes.getActive(),
         window.dscode.settings.getProfile(),
         window.dscode.settings.getShowReasoningProcess(),
         window.dscode.settings.getPersonalization(),
+        window.dscode.settings.getAgentDefaults(),
       ]);
       if (cancelled) return;
       setWorkspaces(recentItems);
       setSessions(allSessions);
       setProviders(providerItems);
-      setThemes(themeItems);
-      setThemeId(activeThemeId);
       setProfile(storedProfile);
       setShowReasoningProcess(storedShowReasoningProcess);
       setPersonalization(storedPersonalization);
-      applyTheme(themeItems.find((item) => item.id === activeThemeId) ?? null);
-      const configured = providerItems.find((item) => item.id === "deepseek" && item.configured)
+      const configured = providerItems.find((item) => item.id === storedDefaults.provider && item.configured)
+        ?? providerItems.find((item) => item.id === "deepseek" && item.configured)
         ?? providerItems.find((item) => item.configured);
       if (configured) {
         setProvider(configured.id);
-        setModel(configured.defaultModel);
-        setEffort(configured.id === "deepseek" ? "max" : "medium");
+        setModel(configured.id === storedDefaults.provider ? storedDefaults.model : configured.defaultModel);
+        setEffort(configured.id === storedDefaults.provider ? storedDefaults.effort ?? "medium" : configured.id === "deepseek" ? "max" : "medium");
       }
       const selectedSession = allSessions[0];
+      const selectedPermission = selectedSession?.permission ?? "auto";
       const selectedProject = selectedSession
         ? recentItems.find((item) => item.path === selectedSession.cwd)
         : undefined;
@@ -357,15 +371,16 @@ export default function App() {
       setWorkspace(selectedProject?.path);
       if (selectedProject) setExpandedProjects(new Set([selectedProject.path]));
       setActiveSession(selectedSession?.path);
+      setPermission(selectedPermission);
       if (configured) {
         try {
           const snapshot = await window.dscode.agent.start({
             ...(selectedSession ? { cwd: selectedSession.cwd, sessionPath: selectedSession.path } : {}),
             project: Boolean(selectedProject),
             provider: configured.id,
-            model: configured.defaultModel,
-            effort: configured.id === "deepseek" ? "max" : "medium",
-            permission: "auto",
+            model: configured.id === storedDefaults.provider ? storedDefaults.model : configured.defaultModel,
+            effort: configured.id === storedDefaults.provider ? storedDefaults.effort ?? "medium" : configured.id === "deepseek" ? "max" : "medium",
+            permission: selectedPermission,
             sandbox: "workspace-write",
           });
           if (!cancelled) hydrateSnapshot(snapshot);
@@ -382,6 +397,13 @@ export default function App() {
     };
   }, [hydrateSnapshot]);
 
+  useEffect(() => window.dscode.themes.onResolvedModeChanged((bootstrap) => {
+    setThemes(bootstrap.themes);
+    setThemePreference(bootstrap.preference);
+    setResolvedThemeMode(bootstrap.resolvedMode);
+    applyThemeBootstrap(bootstrap);
+  }), []);
+
   useEffect(() => {
     const offEvent = window.dscode.agent.onEvent((event) => {
       if (event.type === "agent_start") setRunning(true);
@@ -395,6 +417,9 @@ export default function App() {
         const request = event as ExtensionUiRequest;
         if (request.method === "notify") {
           setToast({ message: request.message ?? t("app.notification"), type: request.notifyType === "error" ? "error" : "info" });
+        } else if (request.method === "setStatus" && typeof request.statusText === "string") {
+          const restoredPermission = request.statusText.match(/^DSCode · (plan|ask|auto|full) ·/)?.[1];
+          if (restoredPermission) setPermission(restoredPermission as PermissionMode);
         } else if (["select", "confirm", "input", "editor"].includes(request.method)) {
           setUiRequest(request);
         }
@@ -413,6 +438,7 @@ export default function App() {
         void window.dscode.auth.status().then(setProviders);
         setProvider(event.providerId);
         setModel(event.modelId);
+        void window.dscode.settings.setAgentDefaults({ provider: event.providerId, model: event.modelId, effort: event.providerId === "deepseek" ? "max" : "medium" });
         setToast({ message: t("auth.accountConnected"), type: "info" });
       }
     });
@@ -427,6 +453,13 @@ export default function App() {
       offCommand?.();
     };
   }, [refreshSessionStats, refreshSessions, t]);
+
+  useEffect(() => {
+    void window.dscode.weixin.getStatus().then(setWeixinStatus).catch(() => undefined);
+    return window.dscode.weixin.onEvent((event) => {
+      if (event.type === "status") setWeixinStatus(event.status);
+    });
+  }, []);
 
   useEffect(() => {
     if (!accountMenuOpen) return;
@@ -513,21 +546,25 @@ export default function App() {
   }, [inspectorOpen]);
 
   const chooseWorkspace = async () => {
+    setActiveView("thread");
     const selected = await window.dscode.workspace.choose();
     if (!selected) return undefined;
     setWorkspaces(await window.dscode.workspace.recent());
     setMessages([]);
     setActiveSession(undefined);
+    setPermission("auto");
     setExpandedProjects((current) => new Set(current).add(selected));
-    await startAgent(selected, undefined, undefined, selected);
+    await startAgent(selected, undefined, { permission: "auto" }, selected);
     textareaRef.current?.focus();
     return selected;
   };
 
   const createNewThread = async () => {
+    setActiveView("thread");
     setMessages([]);
     setActiveSession(undefined);
-    await startAgent();
+    setPermission("auto");
+    await startAgent(undefined, undefined, { permission: "auto" });
     textareaRef.current?.focus();
   };
 
@@ -541,9 +578,10 @@ export default function App() {
   };
 
   const openSession = async (session: SessionSummary) => {
+    setActiveView("thread");
     if (session.path === activeSession || loading) return;
     const projectPath = workspaces.some((item) => item.path === session.cwd) ? session.cwd : undefined;
-    await startAgent(session.cwd, session.path, undefined, projectPath);
+    await startAgent(session.cwd, session.path, { permission: session.permission ?? "auto" }, projectPath);
   };
 
   const sendMessage = async () => {
@@ -614,6 +652,7 @@ export default function App() {
       await window.dscode.agent.command("set_model", { provider: selected.provider, modelId: selected.id });
       setProvider(selected.provider as ProviderId);
       setModel(selected.id);
+      await window.dscode.settings.setAgentDefaults({ provider: selected.provider as ProviderId, model: selected.id, effort });
       void refreshSessionStats();
     } catch (error) {
       if (isAgentSessionClosedError(error)) return;
@@ -627,31 +666,70 @@ export default function App() {
     setPermission(next);
     setPermissionUpdating(true);
     try {
-      const started = await startAgent(
-        activeCwdRef.current,
-        activeSession,
-        { permission: next },
-        workspace,
-        { background: true },
-      );
-      if (!started) setPermission(previous);
+      await window.dscode.agent.command("prompt", { message: `/__dscode-set-permission ${next}` });
+      const stats = await window.dscode.agent.command<AgentSessionStats>("get_session_stats");
+      setSessionStats(stats);
+      if (stats.sessionFile) setActiveSession(stats.sessionFile);
+      await refreshSessions();
+    } catch (error) {
+      setPermission(previous);
+      if (!isAgentSessionClosedError(error)) {
+        setToast({ message: cleanError(error instanceof Error ? error.message : String(error)), type: "error" });
+      }
     } finally {
       setPermissionUpdating(false);
     }
   };
 
-  const changeTheme = async (id: string | null) => {
-    setThemeId(id);
-    applyTheme(themes.find((item) => item.id === id) ?? null);
+  const changeTheme = async (preference: ThemePreference) => {
+    const previous: ThemeBootstrap = {
+      preference: themePreference,
+      resolvedMode: resolvedThemeMode,
+      themes,
+      activeTheme: themePreference.source === "custom"
+        ? themes.find((theme) => theme.id === themePreference.id) ?? null
+        : null,
+    };
+    const activeTheme = preference.source === "custom"
+      ? themes.find((theme) => theme.id === preference.id) ?? null
+      : null;
+    const optimistic: ThemeBootstrap = {
+      preference,
+      resolvedMode: preference.source === "builtin" ? preference.mode : activeTheme?.mode ?? resolvedThemeMode,
+      themes,
+      activeTheme,
+    };
+    setThemePreference(optimistic.preference);
+    setResolvedThemeMode(optimistic.resolvedMode);
+    applyThemeBootstrap(optimistic);
     try {
-      await window.dscode.themes.setActive(id);
+      const bootstrap = await window.dscode.themes.setPreference(preference);
+      setThemes(bootstrap.themes);
+      setThemePreference(bootstrap.preference);
+      setResolvedThemeMode(bootstrap.resolvedMode);
+      applyThemeBootstrap(bootstrap);
+      if (preference.source === "custom" && bootstrap.preference.source !== "custom") {
+        setToast({ message: t("settings.themeUnavailable"), type: "error" });
+      }
     } catch (error) {
+      setThemes(previous.themes);
+      setThemePreference(previous.preference);
+      setResolvedThemeMode(previous.resolvedMode);
+      applyThemeBootstrap(previous);
       setToast({ message: cleanError(error instanceof Error ? error.message : String(error)), type: "error" });
     }
   };
 
   const refreshThemes = async () => {
-    setThemes(await window.dscode.themes.list());
+    const wasCustom = themePreference.source === "custom";
+    const bootstrap = await window.dscode.themes.bootstrap();
+    setThemes(bootstrap.themes);
+    setThemePreference(bootstrap.preference);
+    setResolvedThemeMode(bootstrap.resolvedMode);
+    applyThemeBootstrap(bootstrap);
+    if (wasCustom && bootstrap.preference.source !== "custom") {
+      setToast({ message: t("settings.themeUnavailable"), type: "error" });
+    }
   };
 
   const allTools = useMemo(() => messages.flatMap((message) => message.tools), [messages]);
@@ -784,6 +862,7 @@ export default function App() {
   const activeTitle = sessions.find((session) => session.path === activeSession)?.title ?? (messages[0]?.text || t("status.newThread"));
   const workspaceName = workspace ? workspace.split(/[\\/]/).filter(Boolean).at(-1) : undefined;
   const selectedModel = availableModels.find((candidate) => candidate.provider === provider && candidate.id === model);
+  const selectedThreadPath = activeView === "thread" ? activeSession : undefined;
 
   return (
     <div className={`app-shell${sidebarOpen ? "" : " sidebar-is-collapsed"}${window.dscode.platform === "darwin" ? " platform-macos" : ""}`}>
@@ -807,6 +886,10 @@ export default function App() {
 
         <div className="sidebar-primary">
           <button className="new-thread-button" onClick={() => void createNewThread()}><Plus size={16} /> {t("sidebar.newThread")} <kbd>⌘N</kbd></button>
+          <button className={`new-thread-button weixin-sidebar-button${activeView === "weixin" ? " active" : ""}`} onClick={() => setActiveView("weixin")}>
+            <Bot size={16} /> 微信 Bot
+            <span className={`weixin-sidebar-dot ${weixinStatus?.online ? "online" : weixinStatus?.lastError ? "error" : ""}`} />
+          </button>
         </div>
 
         <div className="thread-list">
@@ -829,7 +912,7 @@ export default function App() {
               return (
                 <div className="project-group" key={item.path}>
                   <button
-                    className={`project-row ${workspace === item.path && !activeSession ? "active" : ""}`}
+                    className={`project-row ${activeView === "thread" && workspace === item.path && !activeSession ? "active" : ""}`}
                     onClick={() => toggleWorkspace(item)}
                     title={item.path}
                     aria-expanded={isExpanded}
@@ -843,10 +926,10 @@ export default function App() {
                       {visibleTasks.map((session) => (
                         <button
                           key={session.path}
-                          className={`project-task-row ${session.path === activeSession ? "active" : ""}`}
+                          className={`project-task-row ${session.path === selectedThreadPath ? "active" : ""}`}
                           onClick={() => void openSession(session)}
                           title={session.title}
-                          aria-current={session.path === activeSession ? "page" : undefined}
+                          aria-current={session.path === selectedThreadPath ? "page" : undefined}
                         >
                           <span>{session.title}</span>
                         </button>
@@ -880,7 +963,7 @@ export default function App() {
             {recentTasks.map((session) => (
               <button
                 key={session.path}
-                className={`thread-row recent-task-row ${session.path === activeSession ? "active" : ""}`}
+                className={`thread-row recent-task-row ${session.path === selectedThreadPath ? "active" : ""}`}
                 onClick={() => void openSession(session)}
               >
                 <span className="thread-copy"><strong>{session.title}</strong><small>{relativeTime(session.updatedAt, locale, t("status.now"))}</small></span>
@@ -919,7 +1002,7 @@ export default function App() {
       </aside>
 
       <main className="main-pane">
-        <div className="thread-layout" ref={threadLayoutRef}>
+        <div className={`thread-layout${activeView === "weixin" ? " weixin-background" : ""}`} ref={threadLayoutRef} inert={activeView === "weixin"} aria-hidden={activeView === "weixin"}>
           <div className="conversation-column">
             <header className="thread-header">
               <div className="header-left">
@@ -1117,6 +1200,7 @@ export default function App() {
             </>
           )}
         </div>
+        {activeView === "weixin" && <WeixinBotView sidebarOpen={sidebarOpen} onShowSidebar={() => setSidebarOpen(true)} />}
       </main>
 
       {settingsOpen && (
@@ -1126,7 +1210,8 @@ export default function App() {
           permission={permission}
           sandbox={sandbox}
           themes={themes}
-          themeId={themeId}
+          themePreference={themePreference}
+          resolvedThemeMode={resolvedThemeMode}
           profile={profile}
           showReasoningProcess={showReasoningProcess}
           personalization={personalization}
@@ -1141,6 +1226,7 @@ export default function App() {
             setProvider(value);
             setModel(nextModel);
             setEffort(nextEffort);
+            await window.dscode.settings.setAgentDefaults({ provider: value, model: nextModel, effort: nextEffort });
             await startAgent(
               activeCwdRef.current,
               activeSession,
@@ -1149,9 +1235,9 @@ export default function App() {
               { providerStatuses: nextProviders },
             );
           }}
-          onPermission={setPermission}
+          onPermission={(next) => void changePermission(next)}
           onSandbox={setSandbox}
-          onTheme={(id) => void changeTheme(id)}
+          onTheme={(preference) => void changeTheme(preference)}
           onRefreshThemes={() => void refreshThemes()}
           onProfile={async (nextProfile) => {
             await window.dscode.settings.setProfile(nextProfile);
@@ -1185,7 +1271,7 @@ export default function App() {
         <SessionSearchDialog
           sessions={sessions}
           workspaces={workspaces}
-          activeSession={activeSession}
+          activeSession={selectedThreadPath}
           query={sessionQuery}
           onQuery={setSessionQuery}
           onClose={() => {
@@ -1701,7 +1787,8 @@ function SettingsDialog(props: {
   permission: PermissionMode;
   sandbox: SandboxMode;
   themes: ThemeSummary[];
-  themeId: string | null;
+  themePreference: ThemePreference;
+  resolvedThemeMode: ThemeMode;
   profile: UserProfile;
   showReasoningProcess: boolean;
   personalization: PersonalizationSettings;
@@ -1710,7 +1797,7 @@ function SettingsDialog(props: {
   onConnected(value: ProviderId): Promise<void>;
   onPermission(value: PermissionMode): void;
   onSandbox(value: SandboxMode): void;
-  onTheme(id: string | null): void;
+  onTheme(preference: ThemePreference): void;
   onRefreshThemes(): void;
   onProfile(profile: UserProfile): Promise<void>;
   onShowReasoningProcess(value: boolean): Promise<void>;
@@ -1965,11 +2052,25 @@ function SettingsDialog(props: {
                 <span><strong>{t("settings.builtInThemes")}</strong><small>{t("settings.builtInThemesDescription")}</small></span>
               </div>
               <div className="theme-grid theme-grid-builtin">
-                <button type="button" aria-pressed={props.themeId === null} className={`theme-card ${props.themeId === null ? "selected" : ""}`} onClick={() => props.onTheme(null)}>
-                  <ThemePreview selected={props.themeId === null} />
+                <button type="button" aria-pressed={props.themePreference.source === "system"} className={`theme-card ${props.themePreference.source === "system" ? "selected" : ""}`} onClick={() => props.onTheme({ source: "system" })}>
+                  <ThemePreview palette={BUILTIN_THEME_PREVIEWS[props.resolvedThemeMode]} selected={props.themePreference.source === "system"} />
                   <span className="theme-card-copy">
-                    <span className="theme-card-title"><strong>DSCode</strong><i>{t("settings.builtIn")}</i></span>
+                    <span className="theme-card-title"><Monitor size={13} /><strong>{t("settings.systemTheme")}</strong><i>{t("settings.builtIn")}</i></span>
                     <small>{t("settings.followsSystem")}</small>
+                  </span>
+                </button>
+                <button type="button" aria-pressed={props.themePreference.source === "builtin" && props.themePreference.mode === "light"} className={`theme-card ${props.themePreference.source === "builtin" && props.themePreference.mode === "light" ? "selected" : ""}`} onClick={() => props.onTheme({ source: "builtin", mode: "light" })}>
+                  <ThemePreview palette={BUILTIN_THEME_PREVIEWS.light} selected={props.themePreference.source === "builtin" && props.themePreference.mode === "light"} />
+                  <span className="theme-card-copy">
+                    <span className="theme-card-title"><Sun size={13} /><strong>{t("settings.light")}</strong><i>{t("settings.builtIn")}</i></span>
+                    <small>{t("settings.lightThemeDescription")}</small>
+                  </span>
+                </button>
+                <button type="button" aria-pressed={props.themePreference.source === "builtin" && props.themePreference.mode === "dark"} className={`theme-card ${props.themePreference.source === "builtin" && props.themePreference.mode === "dark" ? "selected" : ""}`} onClick={() => props.onTheme({ source: "builtin", mode: "dark" })}>
+                  <ThemePreview palette={BUILTIN_THEME_PREVIEWS.dark} selected={props.themePreference.source === "builtin" && props.themePreference.mode === "dark"} />
+                  <span className="theme-card-copy">
+                    <span className="theme-card-title"><Moon size={13} /><strong>{t("settings.dark")}</strong><i>{t("settings.builtIn")}</i></span>
+                    <small>{t("settings.darkThemeDescription")}</small>
                   </span>
                 </button>
               </div>
@@ -1985,8 +2086,8 @@ function SettingsDialog(props: {
               {props.themes.length > 0 ? (
                 <div className="theme-grid theme-grid-custom">
                   {props.themes.map((theme) => (
-                    <button type="button" key={theme.id} aria-pressed={props.themeId === theme.id} className={`theme-card ${props.themeId === theme.id ? "selected" : ""}`} onClick={() => props.onTheme(theme.id)}>
-                      <ThemePreview theme={theme} selected={props.themeId === theme.id} />
+                    <button type="button" key={theme.id} aria-pressed={props.themePreference.source === "custom" && props.themePreference.id === theme.id} className={`theme-card ${props.themePreference.source === "custom" && props.themePreference.id === theme.id ? "selected" : ""}`} onClick={() => props.onTheme({ source: "custom", id: theme.id })}>
+                      <ThemePreview theme={theme} selected={props.themePreference.source === "custom" && props.themePreference.id === theme.id} />
                       <span className="theme-card-copy">
                         <span className="theme-card-title"><strong>{theme.displayName}</strong><i>{theme.mode === "dark" ? t("settings.dark") : t("settings.light")}</i></span>
                         {theme.description && <small className="theme-card-description">{theme.description}</small>}
@@ -2032,19 +2133,37 @@ function SettingsDialog(props: {
   );
 }
 
-const DEFAULT_THEME_PREVIEW = {
-  canvas: "#f7f7f5",
-  surface: "#eeedea",
-  raised: "#ffffff",
-  text: "#20201e",
-  muted: "#74736e",
-  accent: "#282825",
-  border: "#ddddd8",
-  focus: "#6774d9",
+const BUILTIN_THEME_PREVIEWS: Record<ThemeMode, ThemePalette> = {
+  light: {
+    canvas: "#f7f7f5",
+    surface: "#eeedea",
+    raised: "#ffffff",
+    text: "#20201e",
+    muted: "#6d6c67",
+    accent: "#282825",
+    border: "#ddddd8",
+    focus: "#5967c7",
+    success: "#39775b",
+    warning: "#a75b32",
+    danger: "#b6463f",
+  },
+  dark: {
+    canvas: "#20201f",
+    surface: "#191918",
+    raised: "#292928",
+    text: "#ededeb",
+    muted: "#aaa9a3",
+    accent: "#ededeb",
+    border: "#3b3b38",
+    focus: "#9aa4f3",
+    success: "#72b995",
+    warning: "#e49a66",
+    danger: "#e1776f",
+  },
 };
 
-function ThemePreview({ theme, selected }: { theme?: ThemeSummary; selected: boolean }) {
-  const palette = theme?.palette ?? DEFAULT_THEME_PREVIEW;
+function ThemePreview({ theme, palette: providedPalette, selected }: { theme?: ThemeSummary; palette?: ThemePalette; selected: boolean }) {
+  const palette = theme?.palette ?? providedPalette ?? BUILTIN_THEME_PREVIEWS.light;
   const style = {
     "--theme-preview-canvas": palette.canvas,
     "--theme-preview-sidebar": palette.surface,
@@ -2456,8 +2575,10 @@ function ModelPicker({
   onChange(value: string): void;
 }) {
   const rootRef = useRef<HTMLDivElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
   const [open, setOpen] = useState(false);
   const [activeProvider, setActiveProvider] = useState(provider);
+  const [submenuSide, setSubmenuSide] = useState<ModelSubmenuSide>("left");
   const groupedModels = useMemo(() => {
     const options = [...models];
     if (!options.some((item) => item.provider === provider && item.id === model)) {
@@ -2475,6 +2596,22 @@ function ModelPicker({
   useEffect(() => {
     if (open) setActiveProvider(provider);
   }, [open, provider]);
+
+  useEffect(() => {
+    if (!open) return;
+    const updateSubmenuSide = () => {
+      const menu = menuRef.current?.getBoundingClientRect();
+      if (!menu) return;
+      const boundary = rootRef.current?.closest(".conversation-pane")?.getBoundingClientRect() ?? {
+        left: 0,
+        right: window.innerWidth,
+      };
+      setSubmenuSide(chooseModelSubmenuSide(menu, boundary));
+    };
+    updateSubmenuSide();
+    window.addEventListener("resize", updateSubmenuSide);
+    return () => window.removeEventListener("resize", updateSubmenuSide);
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;
@@ -2508,7 +2645,7 @@ function ModelPicker({
         <ChevronDown size={13} />
       </button>
       {open && (
-        <div className="model-menu" role="menu" aria-label="Models">
+        <div className="model-menu" ref={menuRef} role="menu" aria-label="Models">
           {modelGroups.map(([providerId, providerModels], providerIndex) => (
             <div
               className="model-provider-item"
@@ -2525,11 +2662,11 @@ function ModelPicker({
               >
                 <span>{providerId}</span>
                 {providerId === provider ? <Check size={14} /> : <i />}
-                <ChevronRight size={14} />
+                {submenuSide === "left" ? <ChevronLeft size={14} /> : <ChevronRight size={14} />}
               </button>
               {activeProvider === providerId && (
                 <div
-                  className={`model-submenu${providerIndex >= Math.floor(modelGroups.length / 2) ? " align-up" : ""}`}
+                  className={`model-submenu open-${submenuSide}${providerIndex >= Math.floor(modelGroups.length / 2) ? " align-up" : ""}`}
                   role="menu"
                   aria-label={`${providerId} models`}
                 >

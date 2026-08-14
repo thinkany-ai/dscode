@@ -10,9 +10,11 @@ import {
   ipcMain,
   Menu,
   net,
+  nativeTheme,
   protocol,
   screen,
   shell,
+  Tray,
 } from "electron";
 import {
   authenticateProvider,
@@ -32,7 +34,7 @@ import type { AuthInteraction, AuthPrompt } from "@thinkany/dscode-core";
 import { AgentHost } from "./agent-host";
 import { RecentWorkspaces } from "./recent-workspaces";
 import { AppSettings } from "./app-settings";
-import { listCodexThemes } from "./themes";
+import { BUILTIN_THEME_PALETTES, listCodexThemes, resolveThemeBootstrap } from "./themes";
 import {
   archiveSession,
   listSessions,
@@ -40,13 +42,34 @@ import {
   unarchiveSession,
 } from "./session-index";
 import { AUTH_PROMPT_CANCEL_VALUE } from "../shared/types";
-import type { AgentStartOptions, AuthUiEvent, FilePreview, FilePreviewKind, LanguagePreference, PersonalizationSettings, ProviderStatus, UserProfile } from "../shared/types";
+import type {
+  AgentDefaults,
+  AgentStartOptions,
+  AuthUiEvent,
+  FilePreview,
+  FilePreviewKind,
+  LanguagePreference,
+  PersonalizationSettings,
+  ProviderStatus,
+  ThemeBootstrap,
+  ThemePreference,
+  UserProfile,
+} from "../shared/types";
+import { WeixinBotService } from "./weixin/service";
 
 let mainWindow: BrowserWindow | undefined;
 let agentHost: AgentHost | undefined;
 let recentWorkspaces: RecentWorkspaces;
 let appSettings: AppSettings;
+let currentThemeBootstrap: ThemeBootstrap | undefined;
+let rendererReady = false;
+let windowReady = false;
+let showWindowFallback: ReturnType<typeof setTimeout> | undefined;
+let applyingTheme = false;
 let activeAgentCwd: string | undefined;
+let weixinBot: WeixinBotService;
+let tray: Tray | undefined;
+let quitting = false;
 const authPrompts = new Map<string, { resolve(value: string): void; reject(error: Error): void }>();
 
 class AuthPromptCancelledError extends Error {
@@ -59,6 +82,7 @@ const previewFiles = new Map<string, { filePath: string; rootPath: string }>();
 let activePreviewId: string | undefined;
 const currentDirectory = path.dirname(fileURLToPath(import.meta.url));
 const developmentIconPath = path.join(currentDirectory, "../../build/icon-dev.png");
+const trayIconPath = app.isPackaged ? path.join(app.getAppPath(), "build/icon.png") : developmentIconPath;
 const legacyUserDataPath = app.getPath("userData");
 const userDataOverride = process.env.DSCODE_DESKTOP_USER_DATA;
 const stableUserDataPath = userDataOverride
@@ -73,6 +97,8 @@ protocol.registerSchemesAsPrivileged([{
 }]);
 
 app.setName("DSCode");
+const hasSingleInstanceLock = app.requestSingleInstanceLock();
+if (!hasSingleInstanceLock) app.quit();
 fs.mkdirSync(stableUserDataPath, { recursive: true, mode: 0o700 });
 fs.mkdirSync(generalTasksPath, { recursive: true, mode: 0o700 });
 app.setPath("userData", stableUserDataPath);
@@ -84,7 +110,8 @@ if (userDataOverride) {
   app.setAppLogsPath();
 }
 
-function createWindow(): void {
+async function createWindow(): Promise<void> {
+  const themeBootstrap = await resolveAndApplyTheme();
   const { workArea } = screen.getPrimaryDisplay();
   const windowWidth = Math.floor(workArea.width * 0.8);
   const windowHeight = Math.floor(workArea.height * 0.9);
@@ -99,7 +126,7 @@ function createWindow(): void {
     minWidth: 900,
     minHeight: 640,
     show: false,
-    backgroundColor: "#f7f7f5",
+    backgroundColor: themeCanvas(themeBootstrap),
     titleBarStyle: process.platform === "darwin" ? "hiddenInset" : "hidden",
     trafficLightPosition: { x: 17, y: 16 },
     ...(!app.isPackaged ? { icon: developmentIconPath } : {}),
@@ -117,13 +144,22 @@ function createWindow(): void {
     appSettingsFile,
   );
 
+  rendererReady = false;
+  windowReady = false;
   mainWindow.once("ready-to-show", () => {
-    mainWindow?.setPosition(windowX, windowY);
-    mainWindow?.show();
+    windowReady = true;
+    showMainWindow(windowX, windowY);
   });
   mainWindow.on("closed", () => {
+    if (showWindowFallback) clearTimeout(showWindowFallback);
     mainWindow = undefined;
     void agentHost?.stop();
+  });
+  mainWindow.on("close", (event) => {
+    if (quitting || !weixinBot?.store.getState().accountId) return;
+    event.preventDefault();
+    mainWindow?.hide();
+    ensureTray();
   });
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     if (isSafeExternalUrl(url)) void shell.openExternal(url);
@@ -137,6 +173,54 @@ function createWindow(): void {
   const devServer = process.env.VITE_DEV_SERVER_URL;
   if (devServer) void mainWindow.loadURL(devServer);
   else void mainWindow.loadFile(path.join(currentDirectory, "../../dist/index.html"));
+  showWindowFallback = setTimeout(() => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    mainWindow.setPosition(windowX, windowY);
+    mainWindow.show();
+  }, 3_500);
+}
+
+function showMainWindow(windowX?: number, windowY?: number): void {
+  if (!mainWindow || mainWindow.isDestroyed() || !rendererReady || !windowReady) return;
+  if (showWindowFallback) clearTimeout(showWindowFallback);
+  if (windowX !== undefined && windowY !== undefined) mainWindow.setPosition(windowX, windowY);
+  mainWindow.show();
+}
+
+async function resolveAndApplyTheme(preference?: ThemePreference, persist = false): Promise<ThemeBootstrap> {
+  const requested = preference ?? await appSettings.getThemePreference();
+  if (persist) await appSettings.setThemePreference(requested);
+  const themes = await listCodexThemes();
+  const candidate = resolveThemeBootstrap(requested, themes, nativeTheme.shouldUseDarkColors);
+  const nativeSource = candidate.preference.source === "system"
+    ? "system"
+    : candidate.preference.source === "builtin"
+      ? candidate.preference.mode
+      : candidate.activeTheme?.mode ?? "system";
+  applyingTheme = true;
+  try {
+    nativeTheme.themeSource = nativeSource;
+  } finally {
+    applyingTheme = false;
+  }
+  const bootstrap = resolveThemeBootstrap(candidate.preference, themes, nativeTheme.shouldUseDarkColors);
+  currentThemeBootstrap = bootstrap;
+  if (!sameThemePreference(requested, bootstrap.preference)) {
+    await appSettings.setThemePreference(bootstrap.preference);
+  }
+  mainWindow?.setBackgroundColor(themeCanvas(bootstrap));
+  return bootstrap;
+}
+
+function themeCanvas(bootstrap: ThemeBootstrap): string {
+  return bootstrap.activeTheme?.palette.canvas ?? BUILTIN_THEME_PALETTES[bootstrap.resolvedMode].canvas;
+}
+
+function sameThemePreference(a: ThemePreference, b: ThemePreference): boolean {
+  if (a.source !== b.source) return false;
+  if (a.source === "builtin" && b.source === "builtin") return a.mode === b.mode;
+  if (a.source === "custom" && b.source === "custom") return a.id === b.id;
+  return a.source === "system" && b.source === "system";
 }
 
 function installMenu(): void {
@@ -167,20 +251,42 @@ function installMenu(): void {
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
+function ensureTray(): void {
+  if (tray) return;
+  tray = new Tray(trayIconPath);
+  tray.setToolTip("DSCode · 微信 Bot");
+  tray.setContextMenu(Menu.buildFromTemplate([
+    { label: "打开 DSCode", click: () => { if (!mainWindow) createWindow(); else { mainWindow.show(); mainWindow.focus(); } } },
+    { label: "暂停微信 Bot", click: () => void weixinBot.pause() },
+    { type: "separator" },
+    { label: "退出 DSCode", click: () => { quitting = true; app.quit(); } },
+  ]));
+  tray.on("double-click", () => { mainWindow?.show(); mainWindow?.focus(); });
+}
+
 function sendAppCommand(command: string): void {
   mainWindow?.webContents.send("app:command", command);
 }
 
 function registerIpc(): void {
   ipcMain.handle("app:version", () => app.getVersion());
+  ipcMain.on("app:renderer-ready", (event) => {
+    if (event.sender !== mainWindow?.webContents) return;
+    rendererReady = true;
+    showMainWindow();
+  });
   ipcMain.handle("app:open-external", async (_event, url: string) => {
     if (!isSafeExternalUrl(url)) throw new Error("Only http(s) links can be opened");
     await shell.openExternal(url);
   });
 
   ipcMain.handle("themes:list", () => listCodexThemes());
-  ipcMain.handle("themes:get-active", () => appSettings.getThemeId());
-  ipcMain.handle("themes:set-active", (_event, id: string | null) => appSettings.setThemeId(id));
+  ipcMain.handle("themes:bootstrap", () => resolveAndApplyTheme());
+  ipcMain.handle("themes:set-preference", async (_event, preference: ThemePreference) => {
+    const bootstrap = await resolveAndApplyTheme(preference, true);
+    mainWindow?.webContents.send("themes:resolved-mode", bootstrap);
+    return bootstrap;
+  });
 
   ipcMain.handle("settings:get-language", () => appSettings.getLanguage());
   ipcMain.handle("settings:set-language", (_event, language: LanguagePreference) => appSettings.setLanguage(language));
@@ -190,6 +296,8 @@ function registerIpc(): void {
   ipcMain.handle("settings:set-show-reasoning-process", (_event, value: boolean) => appSettings.setShowReasoningProcess(value));
   ipcMain.handle("settings:get-personalization", () => appSettings.getPersonalization());
   ipcMain.handle("settings:set-personalization", (_event, personalization: PersonalizationSettings) => appSettings.setPersonalization(personalization));
+  ipcMain.handle("settings:get-agent-defaults", () => appSettings.getAgentDefaults());
+  ipcMain.handle("settings:set-agent-defaults", (_event, defaults: AgentDefaults) => appSettings.setAgentDefaults(defaults));
 
   ipcMain.handle("workspace:choose", async () => {
     const result = await dialog.showOpenDialog(mainWindow!, {
@@ -250,9 +358,15 @@ function registerIpc(): void {
     const error = await shell.openPath(preview.filePath);
     if (error) throw new Error(error);
   });
-  ipcMain.handle("sessions:list", (_event, cwd?: string) => listSessions(cwd));
+  ipcMain.handle("sessions:list", async (_event, cwd?: string) => {
+    const botSessionId = weixinBot?.store.getState().sessionId;
+    return (await listSessions(cwd)).filter((session) => session.id !== botSessionId);
+  });
   ipcMain.handle("sessions:pin", (_event, id: string, pinned: boolean) => setSessionPinned(id, pinned));
-  ipcMain.handle("sessions:archive", (_event, id: string) => archiveSession(id));
+  ipcMain.handle("sessions:archive", (_event, id: string) => {
+    if (id === weixinBot?.store.getState().sessionId) throw new Error("微信 Bot 固定会话不能归档");
+    return archiveSession(id);
+  });
   ipcMain.handle("sessions:unarchive", (_event, id: string) => unarchiveSession(id));
 
   ipcMain.handle("auth:status", async (): Promise<ProviderStatus[]> => {
@@ -327,6 +441,56 @@ function registerIpc(): void {
   ipcMain.handle("agent:ui-response", (_event, id: string, response: Record<string, unknown>) => {
     return agentHost!.respondToUi(id, response);
   });
+
+  ipcMain.handle("weixin:status", () => weixinBot.getStatus());
+  ipcMain.handle("weixin:choose-workspace", async () => {
+    const result = await dialog.showOpenDialog(mainWindow!, {
+      title: "选择微信 Bot 安全目录",
+      properties: ["openDirectory", "createDirectory"],
+      buttonLabel: "选择并继续",
+    });
+    return result.canceled ? null : result.filePaths[0] ?? null;
+  });
+  ipcMain.handle("weixin:configure-workspace", (_event, workspacePath: string) => weixinBot.configureWorkspace(workspacePath));
+  ipcMain.handle("weixin:choose-attachments", async () => {
+    const state = weixinBot.store.getState();
+    if (!state.workspacePath) throw new Error("请先配置微信 Bot 安全目录");
+    const result = await dialog.showOpenDialog(mainWindow!, {
+      title: "从安全目录发送到微信",
+      defaultPath: state.workspacePath,
+      properties: ["openFile", "multiSelections"],
+      buttonLabel: "添加",
+    });
+    if (result.canceled) return [];
+    const root = await fsp.realpath(state.workspacePath);
+    const files: string[] = [];
+    for (const candidate of result.filePaths.slice(0, 10)) {
+      const real = await fsp.realpath(candidate);
+      if (!isPathInside(root, real)) throw new Error("只能选择安全目录内的文件");
+      const stat = await fsp.stat(real);
+      if (!stat.isFile() || stat.size > 100 * 1024 * 1024) throw new Error("附件必须是 100 MB 以内的文件");
+      files.push(real);
+    }
+    return files;
+  });
+  ipcMain.handle("weixin:login-start", () => weixinBot.startLogin());
+  ipcMain.handle("weixin:login-wait", (_event, sessionId: string) => weixinBot.waitLogin(sessionId));
+  ipcMain.handle("weixin:login-verify", (_event, sessionId: string, code: string) => weixinBot.submitVerifyCode(sessionId, code));
+  ipcMain.handle("weixin:start", async () => { await weixinBot.start(); ensureTray(); });
+  ipcMain.handle("weixin:pause", () => weixinBot.pause());
+  ipcMain.handle("weixin:disconnect", () => weixinBot.disconnect());
+  ipcMain.handle("weixin:history", (_event, query?: { before?: number; limit?: number }) => weixinBot.history(query));
+  ipcMain.handle("weixin:send", (_event, input: { text: string; attachmentPaths?: string[] }) => weixinBot.send(input.text, input.attachmentPaths));
+  ipcMain.handle("weixin:abort", () => weixinBot.abortTurn());
+  ipcMain.handle("weixin:set-auto-launch", async (_event, enabled: boolean) => {
+    app.setLoginItemSettings({ openAtLogin: enabled, args: ["--weixin-background"] });
+    await weixinBot.setAutoLaunch(enabled);
+  });
+  ipcMain.handle("weixin:clear", async (_event, confirmation: string) => {
+    await weixinBot.clearAllData(confirmation);
+    tray?.destroy();
+    tray = undefined;
+  });
 }
 
 function requestAuthInput(prompt: AuthPrompt, send: (event: AuthUiEvent) => void): Promise<string> {
@@ -398,21 +562,48 @@ app.whenReady().then(async () => {
   await migrateDesktopData();
   recentWorkspaces = new RecentWorkspaces(path.join(app.getPath("userData"), "recent-workspaces.json"));
   appSettings = new AppSettings(appSettingsFile);
+  weixinBot = new WeixinBotService(
+    path.join(app.getPath("userData"), "weixin"),
+    app.getVersion(),
+    appSettings,
+    (event) => mainWindow?.webContents.send("weixin:event", event),
+  );
   installFilePreviewProtocol();
   registerIpc();
   installMenu();
-  createWindow();
+  await createWindow();
+  await weixinBot.initialize();
+  if (weixinBot.store.getState().accountId) ensureTray();
+  if (process.argv.includes("--weixin-background") && weixinBot.store.getState().accountId) mainWindow?.hide();
   app.on("activate", () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+    if (BrowserWindow.getAllWindows().length === 0) void createWindow();
   });
 });
 
+nativeTheme.on("updated", () => {
+  if (applyingTheme || !currentThemeBootstrap || currentThemeBootstrap.preference.source !== "system") return;
+  const resolvedMode = nativeTheme.shouldUseDarkColors ? "dark" : "light";
+  if (resolvedMode === currentThemeBootstrap.resolvedMode) return;
+  currentThemeBootstrap = { ...currentThemeBootstrap, resolvedMode };
+  mainWindow?.setBackgroundColor(themeCanvas(currentThemeBootstrap));
+  mainWindow?.webContents.send("themes:resolved-mode", currentThemeBootstrap);
+});
+
+app.on("second-instance", () => {
+  if (!mainWindow) createWindow();
+  if (mainWindow?.isMinimized()) mainWindow.restore();
+  mainWindow?.show();
+  mainWindow?.focus();
+});
+
 app.on("window-all-closed", () => {
-  if (process.platform !== "darwin") app.quit();
+  if (process.platform !== "darwin" && !weixinBot?.store.getState().accountId) app.quit();
 });
 
 app.on("before-quit", () => {
+  quitting = true;
   void agentHost?.stop();
+  void weixinBot?.shutdown();
 });
 
 async function migrateDesktopData(): Promise<void> {

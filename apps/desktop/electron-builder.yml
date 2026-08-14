@@ -10,6 +10,8 @@ files:
   - dist/**/*
   - dist-electron/**/*
   - LICENSE
+  - src/main/weixin/LICENSE.tencent-weixin
+  - build/icon.png
   - package.json
   - "!node_modules/@thinkany/dscode-core/src/**/*"
   - "!node_modules/@thinkany/dscode-core/tsconfig.json"

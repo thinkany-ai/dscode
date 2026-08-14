@@ -10,6 +10,9 @@ import type {
   ToolRenderResultOptions,
 } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
+import { randomUUID } from "node:crypto";
+import fs from "node:fs/promises";
+import path from "node:path";
 import { Type } from "typebox";
 import {
   commandNeedsNetwork,
@@ -39,6 +42,10 @@ import {
   restorePlanState,
   type PlanState,
 } from "./plan.js";
+import {
+  restoreSessionPermission,
+  SESSION_PERMISSION_ENTRY,
+} from "./session-permission.js";
 import { discoverProjectCommands } from "./project-profile.js";
 import { registerDSCodeProjectTrust } from "./project-trust.js";
 import { defaultModelForProvider } from "./providers.js";
@@ -175,6 +182,7 @@ export function createDSCodeExtension(options: DSCodeRuntimeOptions): InlineExte
       registerLocalImageInput(pi);
       registerNaturalExit(pi);
       registerSessionCommands(pi);
+      registerWeixinMediaTool(pi, options.cwd);
       registerCommandTools(
         pi,
         processes,
@@ -231,8 +239,10 @@ export function createDSCodeExtension(options: DSCodeRuntimeOptions): InlineExte
         checkpoints.length = 0;
         undone.clear();
         projectCommands = await discoverProjectCommands(ctx.cwd);
-        restoreCheckpointState(ctx.sessionManager.getBranch(), checkpoints, undone);
-        planState = restorePlanState(ctx.sessionManager.getBranch());
+        const branch = ctx.sessionManager.getBranch();
+        restoreCheckpointState(branch, checkpoints, undone);
+        planState = restorePlanState(branch);
+        ({ permission, permissionBeforePlan } = restoreSessionPermission(branch, options.permission));
         lastOfferedPlanRevision = planState?.revision ?? 0;
         updateStatus(ctx);
         ctx.ui.setHiddenThinkingLabel(
@@ -267,6 +277,14 @@ export function createDSCodeExtension(options: DSCodeRuntimeOptions): InlineExte
       pi.on("agent_settled", async (_event, ctx) => {
         await queueSessionPartition(ctx);
       });
+
+      if (permission === "trusted-workspace") {
+        pi.on("session_before_compact", (event, ctx) => {
+          const contextWindow = ctx.model?.contextWindow ?? 128_000;
+          event.preparation.settings.keepRecentTokens = Math.max(20_000, Math.min(60_000, Math.floor(contextWindow * 0.2)));
+          event.preparation.settings.reserveTokens = Math.max(8_000, Math.min(32_000, Math.floor(contextWindow * 0.05)));
+        });
+      }
 
       pi.on("session_shutdown", async (_event, ctx) => {
         await queueSessionPartition(ctx);
@@ -450,7 +468,7 @@ export function createDSCodeExtension(options: DSCodeRuntimeOptions): InlineExte
           permission = permissionBeforePlan;
           applyPermissionTools();
           updateStatus(ctx);
-          pi.appendEntry("dscode-permission", { permission });
+          pi.appendEntry(SESSION_PERMISSION_ENTRY, { permission });
           pi.sendUserMessage(
             [
               "Execute the approved plan below. Keep update_plan statuses current as you work.",
@@ -507,7 +525,7 @@ export function createDSCodeExtension(options: DSCodeRuntimeOptions): InlineExte
           }
           applyPermissionTools();
           updateStatus(ctx);
-          pi.appendEntry("dscode-permission", { permission });
+          pi.appendEntry(SESSION_PERMISSION_ENTRY, { permission });
           ctx.ui.notify(`Permission mode: ${permission}`, "info");
         },
       });
@@ -547,8 +565,24 @@ export function createDSCodeExtension(options: DSCodeRuntimeOptions): InlineExte
           permission = parsed.data;
           applyPermissionTools();
           updateStatus(ctx);
-          pi.appendEntry("dscode-permission", { permission });
+          pi.appendEntry(SESSION_PERMISSION_ENTRY, { permission });
           ctx.ui.notify(`Permission mode: ${permission}`, "info");
+        },
+      });
+
+      pi.registerCommand("__dscode-set-permission", {
+        description: "Set and persist the current desktop session permission",
+        handler: async (args, ctx) => {
+          const parsed = permissionSchema.safeParse(args.trim());
+          if (!parsed.success) throw new Error("Invalid desktop session permission");
+          if (parsed.data === "plan" && permission !== "plan") {
+            permissionBeforePlan = permission;
+          }
+          permission = parsed.data;
+          if (permission !== "plan") permissionBeforePlan = permission;
+          applyPermissionTools();
+          updateStatus(ctx);
+          pi.appendEntry(SESSION_PERMISSION_ENTRY, { permission });
         },
       });
 
@@ -760,6 +794,37 @@ export function createDSCodeExtension(options: DSCodeRuntimeOptions): InlineExte
       registerHooks(pi, effectiveAccess);
     },
   };
+}
+
+function registerWeixinMediaTool(pi: ExtensionAPI, workspacePath: string): void {
+  const outboxPath = process.env.DSCODE_WEIXIN_MEDIA_OUTBOX;
+  if (!outboxPath) return;
+  pi.registerTool({
+    name: "send_weixin_media",
+    label: "Send Weixin media",
+    description: "Send an existing image, video, or file from the bound workspace to the connected Weixin chat.",
+    promptSnippet: "send_weixin_media: explicitly send a workspace file to the connected Weixin user",
+    promptGuidelines: ["Only call this tool when the user explicitly asks to receive a concrete file. Never guess a path."],
+    parameters: Type.Object({
+      path: Type.String({ minLength: 1, description: "Absolute path or workspace-relative path to an existing file" }),
+      caption: Type.Optional(Type.String({ description: "Optional caption sent before the attachment" })),
+    }),
+    executionMode: "sequential",
+    async execute(_id, params) {
+      const root = await fs.realpath(workspacePath);
+      const candidate = path.isAbsolute(params.path) ? params.path : path.resolve(root, params.path);
+      const real = await fs.realpath(candidate);
+      const relative = path.relative(root, real);
+      if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+        throw new Error("Weixin media must be inside the bound workspace");
+      }
+      const stat = await fs.stat(real);
+      if (!stat.isFile()) throw new Error("Weixin media path must be a file");
+      if (stat.size > 100 * 1024 * 1024) throw new Error("Weixin media cannot exceed 100 MB");
+      await fs.appendFile(outboxPath, `${JSON.stringify({ id: randomUUID(), path: real, caption: params.caption ?? "" })}\n`, { mode: 0o600 });
+      return { content: [{ type: "text", text: `Queued ${path.basename(real)} for delivery to Weixin.` }], details: { path: real, size: stat.size } };
+    },
+  });
 }
 
 function registerDeepSeekProvider(pi: ExtensionAPI, options: DSCodeRuntimeOptions): void {

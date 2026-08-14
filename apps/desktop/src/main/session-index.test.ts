@@ -18,6 +18,7 @@ describe("session index", () => {
     await fs.writeFile(file, [
       JSON.stringify({ type: "session", version: 3, id: "session-1", cwd: "/tmp/project" }),
       JSON.stringify({ type: "model_change", modelId: "deepseek-v4-flash" }),
+      JSON.stringify({ type: "custom", customType: "dscode-permission", data: { permission: "full" } }),
       JSON.stringify({ type: "message", message: { role: "user", content: [{ type: "text", text: "Implement a polished desktop client" }] } }),
       JSON.stringify({ type: "message", message: { role: "assistant", content: [{ type: "text", text: "I will inspect the core package." }] } }),
     ].join("\n"));
@@ -26,6 +27,7 @@ describe("session index", () => {
       id: "session-1",
       cwd: path.resolve("/tmp/project"),
       model: "deepseek-v4-flash",
+      permission: "full",
       title: "Implement a polished desktop client",
       messageCount: 2,
     });

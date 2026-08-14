@@ -1,4 +1,4 @@
-import type { DesktopApi } from "../shared/types";
+import type { DesktopApi, ThemePreference } from "../shared/types";
 
 const workspace = "/Users/demo/projects/dscode";
 const themesWorkspace = "/Users/demo/projects/codexthemes-skills";
@@ -17,6 +17,7 @@ function previewSession(id: string, title: string, ageMs: number, messageCount: 
     createdAt: previewNow,
     updatedAt: new Date(Date.now() - ageMs).toISOString(),
     model: "deepseek-v4-flash",
+    permission: "auto" as const,
     messageCount,
     pinned: false,
     archived: false,
@@ -24,16 +25,35 @@ function previewSession(id: string, title: string, ageMs: number, messageCount: 
 }
 
 export function createPreviewApi(): DesktopApi {
+  let themePreference: ThemePreference = { source: "system" };
+  const themeBootstrap = () => ({
+    preference: themePreference,
+    resolvedMode: themePreference.source === "builtin"
+      ? themePreference.mode
+      : window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" as const : "light" as const,
+    themes: [],
+    activeTheme: null,
+  });
   return {
     platform: "darwin",
     app: {
       version: async () => "0.1.0-preview",
       openExternal: async () => undefined,
+      ready: () => undefined,
     },
     themes: {
       list: async () => [],
-      getActive: async () => null,
-      setActive: async () => undefined,
+      bootstrap: async () => themeBootstrap(),
+      setPreference: async (preference) => {
+        themePreference = preference;
+        return themeBootstrap();
+      },
+      onResolvedModeChanged: (listener) => {
+        const media = window.matchMedia("(prefers-color-scheme: dark)");
+        const update = () => { if (themePreference.source === "system") listener(themeBootstrap()); };
+        media.addEventListener("change", update);
+        return () => media.removeEventListener("change", update);
+      },
     },
     settings: {
       getLanguage: async () => "system",
@@ -44,6 +64,8 @@ export function createPreviewApi(): DesktopApi {
       setShowReasoningProcess: async () => undefined,
       getPersonalization: async () => ({ tone: "default", customInstructions: "" }),
       setPersonalization: async () => undefined,
+      getAgentDefaults: async () => ({ provider: "deepseek", model: "deepseek-v4-flash", effort: "max" }),
+      setAgentDefaults: async () => undefined,
     },
     workspace: {
       choose: async () => workspace,
@@ -141,6 +163,28 @@ export function createPreviewApi(): DesktopApi {
       respondToUi: async () => undefined,
       onEvent: () => () => undefined,
       onError: () => () => undefined,
+    },
+    weixin: {
+      getStatus: async () => ({
+        state: "unconfigured", online: false, trusted: false, autoLaunch: false,
+        running: false, unread: 0, compactionCount: 0, mediaBytes: 0,
+        defaults: { provider: "deepseek", model: "deepseek-v4-flash", effort: "max" },
+      }),
+      chooseWorkspace: async () => null,
+      configureWorkspace: async () => undefined,
+      chooseAttachments: async () => [],
+      startLogin: async () => ({ sessionId: "preview", qrContent: "", qrImageDataUrl: "", expiresAt: previewNow }),
+      waitLogin: async () => ({ state: "waiting", message: "等待扫码" }),
+      submitVerifyCode: async () => undefined,
+      start: async () => undefined,
+      pause: async () => undefined,
+      disconnect: async () => undefined,
+      getHistory: async () => ({ messages: [], hasMore: false }),
+      send: async () => undefined,
+      abortTurn: async () => undefined,
+      setAutoLaunch: async () => undefined,
+      clearAllData: async () => undefined,
+      onEvent: () => () => undefined,
     },
   };
 }
