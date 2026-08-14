@@ -46,7 +46,7 @@ export class MCPManager {
       this.errors.push("Project is not trusted; project MCP servers were not started.");
     }
     const configs = await loadMcpConfigs(ctx.cwd, trusted);
-    for (const [serverName, config] of Object.entries(configs)) {
+    for (const [serverName, config] of Object.entries(configs).sort(([left], [right]) => compareText(left, right))) {
       if (config.disabled) continue;
       try {
         await this.connectServer(pi, ctx, serverName, config);
@@ -65,7 +65,7 @@ export class MCPManager {
   }
 
   toolNames(): string[] {
-    return this.servers.flatMap((server) => server.tools);
+    return this.servers.flatMap((server) => server.tools).sort(compareText);
   }
 
   async close(): Promise<void> {
@@ -105,10 +105,22 @@ export class MCPManager {
       }
 
       const listed = await client.listTools();
-      const registered: string[] = [];
-      for (const tool of listed.tools) {
-        const localName = `mcp__${sanitizeName(serverName)}__${sanitizeName(tool.name)}`;
-        registered.push(localName);
+      const existingNames = new Set(this.servers.flatMap((server) => server.tools));
+      const prepared = [...listed.tools]
+        .sort((left, right) => compareText(left.name, right.name))
+        .map((tool) => ({
+          tool,
+          localName: `mcp__${sanitizeName(serverName)}__${sanitizeName(tool.name)}`,
+        }));
+      const registered = prepared.map(({ localName }) => localName);
+      const seenNames = new Set(existingNames);
+      for (const { localName } of prepared) {
+        if (seenNames.has(localName)) {
+          throw new Error(`MCP tool name collision after sanitization: ${localName}`);
+        }
+        seenNames.add(localName);
+      }
+      for (const { tool, localName } of prepared) {
         pi.registerTool({
           name: localName,
           label: `${serverName}: ${tool.title ?? tool.name}`,
@@ -188,6 +200,10 @@ function defaultStringEnvironment(): Record<string, string> {
 
 function sanitizeName(value: string): string {
   return value.replace(/[^a-zA-Z0-9_-]/g, "_");
+}
+
+function compareText(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
 }
 
 interface FormattedMcpResult {

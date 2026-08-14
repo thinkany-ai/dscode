@@ -41,6 +41,7 @@ export interface DSCodeRuntimeOptions {
   activeTools: string[];
   toolsExplicit: boolean;
   personalizationFile?: string;
+  fixtureCapturePath?: string;
 }
 
 export interface ParsedRuntimeArgs {
@@ -76,6 +77,7 @@ export function parseRuntimeArgs(argv: string[]): ParsedRuntimeArgs {
   let activeTools: string[] | undefined;
   let toolsExplicit = false;
   const personalizationFile = process.env.DSCODE_PERSONALIZATION_FILE?.trim();
+  let fixtureCapturePath = process.env.DSCODE_FIXTURE_CAPTURE?.trim();
   let help = false;
   let version = false;
   let yolo = false;
@@ -129,6 +131,8 @@ export function parseRuntimeArgs(argv: string[]): ParsedRuntimeArgs {
     } else if (flag === "--no-tools") {
       activeTools = [];
       toolsExplicit = true;
+    } else if (flag === "--record-fixture") {
+      fixtureCapturePath = path.resolve(takeValue());
     } else if (flag === "--no-resume") {
       // Pi starts a new persisted session unless --continue/--resume is passed.
     } else if (flag === "--help" || flag === "-h") {
@@ -180,6 +184,7 @@ export function parseRuntimeArgs(argv: string[]): ParsedRuntimeArgs {
       activeTools,
       toolsExplicit,
       ...(personalizationFile ? { personalizationFile: path.resolve(personalizationFile) } : {}),
+      ...(fixtureCapturePath ? { fixtureCapturePath: path.resolve(fixtureCapturePath) } : {}),
     },
     piArgs: forwarded,
     help,
@@ -209,6 +214,9 @@ export function printDSCodeHelp(): void {
 
 Usage:
   dscode [options] [prompt]
+  dscode replay <trace.jsonl> [--json]
+  dscode replay --execute <fixture.json> --prompt "task" [--json]
+  dscode evaluate <trace.jsonl> [--json] [budget options]
   dscode -p "task"                 Non-interactive text mode
   dscode --mode json -p "task"     JSONL/CI mode
   dscode --mode rpc                IDE/RPC server
@@ -227,6 +235,7 @@ DSCode options:
   --sandbox <mode>                 read-only|workspace-write|danger-full-access
   --network                        Pre-authorize command network access for this run
   --web                            Enable DeepSeek server-side web search
+  --record-fixture <file>          Explicitly capture assistant responses for offline replay
   -y, --yes                        YOLO: trust project, skip approvals, allow host + network
 
 Session and editor features:
@@ -237,6 +246,12 @@ Session and editor features:
 
 DSCode commands:
   /plan /permissions /effort /base-url /status /undo /checkpoints /diff /jobs /mcp /agents /doctor
+
+Runtime traces and evaluation:
+  dscode replay <file> --compare <candidate>  Compare two trace projections
+  dscode replay --execute <fixture> --prompt <task>  Execute a deterministic fixture replay
+  --max-tool-calls <n> --max-duration-ms <n> --max-total-tokens <n> --max-cost <n>
+  --allow-errors                             Do not fail evaluation on runtime errors
 
 Authentication:
   dscode login [provider]           Sign in to a supported model provider
