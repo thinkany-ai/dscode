@@ -134,7 +134,12 @@ const applyPatchParameters = Type.Object({
   }),
 });
 
-export function createDSCodeExtension(options: DSCodeRuntimeOptions): InlineExtension {
+export function createDSCodeExtension(inputOptions: DSCodeRuntimeOptions): InlineExtension {
+  // Keep the extension's provider and tool configuration stable for its lifetime.
+  const options = Object.freeze({
+    ...inputOptions,
+    activeTools: [...inputOptions.activeTools],
+  });
   return {
     name: "dscode",
     factory(pi) {
