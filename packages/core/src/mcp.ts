@@ -5,6 +5,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { DSCODE_VERSION } from "./version.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
 import { z } from "zod";
 import { renderCollapsibleToolResult, renderToolCall } from "./tool-ui.js";
 import { getDSCodeHome } from "./home.js";
@@ -122,10 +123,10 @@ export class MCPManager {
               undefined,
               signal ? { signal } : {},
             );
-            const text = formatMcpResult(result);
-            if (result.isError) throw new Error(text);
+            const formatted = formatMcpResult(result);
+            if (result.isError) throw new Error(formatted.text);
             return {
-              content: [{ type: "text", text }],
+              content: formatted.content,
               details: { server: serverName, tool: tool.name },
             };
           },
@@ -189,23 +190,59 @@ function sanitizeName(value: string): string {
   return value.replace(/[^a-zA-Z0-9_-]/g, "_");
 }
 
-function formatMcpResult(result: Awaited<ReturnType<Client["callTool"]>>): string {
-  const parts: string[] = [];
-  const content = Array.isArray(result.content) ? result.content : [];
-  for (const item of content as Array<Record<string, any>>) {
+interface FormattedMcpResult {
+  content: Array<TextContent | ImageContent>;
+  text: string;
+}
+
+function formatMcpResult(result: Awaited<ReturnType<Client["callTool"]>>): FormattedMcpResult {
+  const content: Array<TextContent | ImageContent> = [];
+  const textParts: string[] = [];
+  const addText = (text: string): void => {
+    content.push({ type: "text", text });
+    textParts.push(text);
+  };
+  const resultContent = Array.isArray(result.content) ? result.content : [];
+  for (const item of resultContent as Array<Record<string, unknown>>) {
     if (item.type === "text") {
-      parts.push(item.text);
+      addText(typeof item.text === "string" ? item.text : "(MCP text content was invalid)");
+    } else if (
+      item.type === "image" &&
+      typeof item.data === "string" &&
+      typeof item.mimeType === "string"
+    ) {
+      content.push({ type: "image", data: item.data, mimeType: item.mimeType });
     } else if (item.type === "resource") {
       const resource = item.resource;
-      parts.push("text" in resource ? resource.text : `[binary resource: ${resource.uri}]`);
+      if (isRecord(resource)) {
+        addText(
+          typeof resource.text === "string"
+            ? resource.text
+            : `[binary resource: ${typeof resource.uri === "string" ? resource.uri : "unknown"}]`,
+        );
+      } else {
+        addText("(MCP resource content was invalid)");
+      }
     } else if (item.type === "resource_link") {
-      parts.push(`[resource: ${item.name}](${item.uri})`);
+      addText(
+        `[resource: ${typeof item.name === "string" ? item.name : "unnamed"}](${typeof item.uri === "string" ? item.uri : "unknown"})`,
+      );
     } else {
-      parts.push(`[${item.type} content omitted from this text MCP tool result]`);
+      addText(
+        `[${typeof item.type === "string" ? item.type : "unknown"} content omitted from this MCP tool result]`,
+      );
     }
   }
   if (result.structuredContent !== undefined) {
-    parts.push(JSON.stringify(result.structuredContent, null, 2));
+    addText(JSON.stringify(result.structuredContent, null, 2));
   }
-  return parts.join("\n\n") || "(MCP tool returned no text)";
+  if (content.length === 0) addText("(MCP tool returned no content)");
+  return {
+    content,
+    text: textParts.join("\n\n") || "(MCP tool returned image content without error details)",
+  };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

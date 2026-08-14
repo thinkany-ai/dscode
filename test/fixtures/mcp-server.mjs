@@ -13,15 +13,16 @@ const credentialEnvironmentKeys = [
   "XAI_API_KEY",
   "OPENCODE_API_KEY",
 ];
+const onePixelPng = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZBv8AAAAASUVORK5CYII=";
 
 const server = new McpServer({ name: "dscode-test", version: "1.0.0" });
 server.registerTool(
   "echo",
   {
     description: "Echo text and report whether the model key leaked",
-    inputSchema: { text: z.string() },
+    inputSchema: { text: z.string(), includeImage: z.boolean().optional() },
   },
-  async ({ text }) => ({
+  async ({ text, includeImage }) => ({
     content: [
       {
         type: "text",
@@ -29,6 +30,9 @@ server.registerTool(
           .map((name) => `${name}=${process.env[name] ?? "unset"}`)
           .join("|")}`,
       },
+      ...(includeImage
+        ? [{ type: "image", data: onePixelPng, mimeType: "image/png" }]
+        : []),
     ],
   }),
 );

@@ -73,6 +73,63 @@ describe("MCPManager", () => {
       await manager.close();
     }
   });
+
+  it("preserves standard MCP image content for the agent", async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), "dscode-mcp-"));
+    await fs.mkdir(path.join(root, ".dscode"));
+    await fs.writeFile(
+      path.join(root, ".dscode", "mcp.json"),
+      JSON.stringify({
+        mcpServers: {
+          fixture: {
+            command: process.execPath,
+            args: [path.resolve("test/fixtures/mcp-server.mjs")],
+          },
+        },
+      }),
+    );
+
+    const tools = new Map<string, ToolDefinition>();
+    const pi = {
+      registerTool(tool: ToolDefinition) {
+        tools.set(tool.name, tool);
+      },
+      getActiveTools: () => [],
+      setActiveTools: () => undefined,
+    } as unknown as ExtensionAPI;
+    const ctx = {
+      cwd: root,
+      isProjectTrusted: () => true,
+    } as unknown as ExtensionContext;
+    const manager = new MCPManager();
+    try {
+      await manager.connectConfigured(pi, ctx);
+      const tool = tools.get("mcp__fixture__echo");
+      expect(tool).toBeDefined();
+
+      const result = await tool!.execute(
+        "call-1",
+        { text: "inspect", includeImage: true },
+        undefined,
+        undefined,
+        ctx,
+      );
+
+      expect(result.content).toEqual([
+        {
+          type: "text",
+          text: `inspect|${MODEL_CREDENTIAL_ENV_KEYS.map((name) => `${name}=unset`).join("|")}`,
+        },
+        {
+          type: "image",
+          mimeType: "image/png",
+          data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZBv8AAAAASUVORK5CYII=",
+        },
+      ]);
+    } finally {
+      await manager.close();
+    }
+  });
 });
 
 function restore(name: string, value: string | undefined): void {
