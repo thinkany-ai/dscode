@@ -205,14 +205,14 @@ kbd { margin-left: auto; color: var(--faint); font-family: -apple-system, sans-s
 .work-log { margin: 0 0 17px; color: var(--muted); font-size: 12px; }
 .work-log-summary { width: 100%; min-height: 32px; display: flex; align-items: center; gap: 6px; padding: 2px 3px 9px; border-bottom: 1px solid var(--line); color: var(--muted); text-align: left; user-select: none; }
 .work-log-summary:hover { color: var(--ink); }
-.work-log-summary[aria-disabled="true"] { cursor: default; }
 .work-log-status { cursor: default; }
-.work-log-summary > span { font-size: 13px; font-weight: 570; }
+.work-log-summary > span { min-width: 0; flex: 1; overflow: hidden; font-size: 13px; font-weight: 570; text-overflow: ellipsis; white-space: nowrap; }
 .work-log-summary time { color: var(--faint); font-variant-numeric: tabular-nums; }
 .work-log-spinner { flex: none; margin-right: 1px; color: var(--focus); }
 .work-log-chevron { margin-left: 1px; transition: transform .16s ease; }
 .work-log.open .work-log-chevron { transform: rotate(180deg); }
-.work-log.active .work-log-summary > span { color: var(--ink); }
+.work-log.active .work-log-summary > span { color: var(--muted); font-weight: 450; opacity: .78; }
+.work-log.active .work-log-summary:hover > span { color: var(--ink); opacity: 1; }
 .work-log-content { padding: 8px 0 3px; animation: work-log-reveal .16s ease-out; }
 .work-timeline { display: flex; flex-direction: column; gap: 2px; }
 .work-text { padding: 4px 0 10px; color: var(--ink); font-size: 14px; line-height: 1.62; }

@@ -627,6 +627,10 @@ export default function App() {
     const messageImages = original.images.map(({ data, mimeType }) => ({ data, mimeType }));
     if (!text && messageImages.length === 0) return;
     const images = messageImages.map((image) => ({ type: "image", ...image }));
+    // Replacing the session shortens the scrollable content. Treat that
+    // programmatic jump as a new tail-following sequence for the resend.
+    followingConversationTailRef.current = true;
+    previousConversationScrollTopRef.current = 0;
     setEditingSubmitting(true);
     setRunning(true);
     try {
@@ -1690,7 +1694,8 @@ function WorkLog({
   const activity = getAssistantActivity(messages);
   const [open, setOpen] = useState(false);
   const [now, setNow] = useState(Date.now());
-  const expanded = active || open;
+  const latestWork = timeline.at(-1);
+  const latestWorkLabel = latestWorkSummary(latestWork, t);
 
   useEffect(() => {
     if (!active) return;
@@ -1701,17 +1706,16 @@ function WorkLog({
   const duration = workDuration(messages, active ? now : undefined);
   const latestWorkKey = timeline.at(-1)?.key;
   return (
-    <section className={`work-log ${expanded ? "open" : ""} ${active ? "active" : "complete"}`}>
+    <section className={`work-log ${open ? "open" : ""} ${active ? "active" : "complete"}`}>
       <button
         className="work-log-summary"
-        aria-expanded={expanded}
-        aria-disabled={active}
-        onClick={() => { if (!active) setOpen((value) => !value); }}
+        aria-expanded={open}
+        onClick={() => setOpen((value) => !value)}
       >
         {active && <LoaderCircle className="spin work-log-spinner" size={14} aria-hidden="true" />}
         <span aria-live="polite">
           {active
-            ? t(activity === "tool" ? "work.toolStatus" : "work.thinkingStatus")
+            ? latestWorkLabel ?? t(activity === "tool" ? "work.toolStatus" : "work.thinkingStatus")
             : failed
               ? t("work.processedErrors")
               : t("work.processed")}
@@ -1719,7 +1723,7 @@ function WorkLog({
         {duration !== undefined && <time>{formatElapsed(duration)}</time>}
         <ChevronDown className="work-log-chevron" size={15} />
       </button>
-      {expanded && (
+      {open && (
         <div className="work-log-content">
           <div className="work-timeline">
             {timeline.map(({ message, item, key }) => {
@@ -1740,6 +1744,22 @@ function WorkLog({
       )}
     </section>
   );
+}
+
+function latestWorkSummary(entry: TurnWorkEntry | undefined, t: Translator): string | undefined {
+  if (!entry) return undefined;
+  if (entry.item.type === "tool") {
+    const toolId = entry.item.toolId;
+    const tool = entry.message.tools.find((candidate) => candidate.id === toolId);
+    return tool ? toolDisplayTitle(tool, t) : t("work.toolStatus");
+  }
+
+  const lines = entry.item.text
+    .split(/\r?\n/)
+    .map((line) => line.trim().replace(/\s+/g, " "))
+    .filter(Boolean);
+  const lastLine = lines.at(-1);
+  return lastLine ? crop(lastLine, 120) : undefined;
 }
 
 function ReasoningBlock({ text, active, autoExpand }: { text: string; active: boolean; autoExpand: boolean }) {
