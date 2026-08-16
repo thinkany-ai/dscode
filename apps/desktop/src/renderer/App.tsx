@@ -83,7 +83,6 @@ import {
   coalesceStreamingAgentEvents,
   getAssistantActivity,
   groupConversation,
-  isAssistantTurnActive,
   isStreamingAgentEvent,
   normalizeMessages,
   optimisticUserMessage,
@@ -190,6 +189,7 @@ export default function App() {
   const [sessionQuery, setSessionQuery] = useState("");
   const [toast, setToast] = useState<{ message: string; type: "info" | "error" }>();
   const [uiRequest, setUiRequest] = useState<ExtensionUiRequest>();
+  const [resumingUiRequest, setResumingUiRequest] = useState(false);
   const [authEvent, setAuthEvent] = useState<AuthUiEvent>();
   const authCancellationRef = useRef(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -442,7 +442,10 @@ export default function App() {
 
   useEffect(() => {
     const offEvent = window.dscode.agent.onEvent((event) => {
-      if (event.type === "agent_start") setRunning(true);
+      if (event.type === "agent_start") {
+        setResumingUiRequest(false);
+        setRunning(true);
+      }
       if (event.type === "agent_settled") {
         setRunning(false);
         setUiRequest(undefined);
@@ -454,6 +457,7 @@ export default function App() {
         if (request.method === "notify") {
           setToast({ message: request.message ?? t("app.notification"), type: request.notifyType === "error" ? "error" : "info" });
         } else if (["select", "confirm", "input", "editor"].includes(request.method)) {
+          setResumingUiRequest(false);
           setUiRequest(request);
         }
       }
@@ -462,6 +466,7 @@ export default function App() {
     const offError = window.dscode.agent.onError((message) => {
       if (isAgentSessionClosedError(message)) return;
       setRunning(false);
+      setResumingUiRequest(false);
       setUiRequest(undefined);
       setToast({ message: cleanError(message), type: "error" });
     });
@@ -844,9 +849,22 @@ export default function App() {
   const conversationGroups = useMemo(() => groupConversation(messages), [messages]);
   const editableUserMessageId = [...conversationGroups].reverse().find((group) => group.type === "user")?.id;
   const latestAssistantGroup = [...conversationGroups].reverse().find((group) => group.type === "assistant");
+  const latestConversationGroup = conversationGroups.at(-1);
+  const latestAssistantPreview = latestAssistantGroup ? splitAssistantTurn(latestAssistantGroup.messages, false) : undefined;
+  const latestAssistantHasVisibleResponse = (latestAssistantPreview?.responses.length ?? 0) > 0;
   const activityRunning = running && !editingSubmitting;
-  const latestAssistantIsActive = activityRunning && latestAssistantGroup?.type === "assistant"
-    && isAssistantTurnActive(latestAssistantGroup.messages);
+  const latestAssistantIsActive = (
+    activityRunning
+    && latestConversationGroup?.type === "assistant"
+    && latestAssistantGroup?.type === "assistant"
+    && latestAssistantGroup.id === latestConversationGroup.id
+  ) || (
+    resumingUiRequest
+    && !latestAssistantHasVisibleResponse
+    && latestConversationGroup?.type === "assistant"
+    && latestAssistantGroup?.type === "assistant"
+    && latestAssistantGroup.id === latestConversationGroup.id
+  );
   const activeAssistantGroupId = latestAssistantIsActive ? latestAssistantGroup?.id : undefined;
   const activeAssistantHasWork = latestAssistantIsActive && latestAssistantGroup?.type === "assistant"
     && splitAssistantTurn(latestAssistantGroup.messages, true).work.length > 0;
@@ -1153,7 +1171,7 @@ export default function App() {
                           onPreviewFile={handlePreviewFile}
                         />
                   ))}
-                  {activityRunning && !uiRequest && !activeAssistantHasWork && (
+                  {latestAssistantIsActive && !uiRequest && !activeAssistantHasWork && (
                     <div className="work-log active" role="status" aria-live="polite">
                       <div className="work-log-summary work-log-status">
                         <LoaderCircle className="spin work-log-spinner" size={14} aria-hidden="true" />
@@ -1165,8 +1183,14 @@ export default function App() {
                     <InlineExtensionRequest
                       key={uiRequest.id}
                       request={uiRequest}
-                      onDone={() => setUiRequest(undefined)}
-                      onError={(message) => setToast({ message, type: "error" })}
+                      onDone={() => {
+                        setUiRequest(undefined);
+                        setResumingUiRequest(true);
+                      }}
+                      onError={(message) => {
+                        setResumingUiRequest(false);
+                        setToast({ message, type: "error" });
+                      }}
                     />
                   )}
                 </div>
