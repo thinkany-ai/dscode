@@ -23,6 +23,7 @@ import {
   CircleAlert,
   CircleStop,
   Code2,
+  Copy,
   ExternalLink,
   Eye,
   File as FileIcon,
@@ -46,6 +47,7 @@ import {
   Paperclip,
   PanelLeft,
   PanelRight,
+  Pencil,
   Plus,
   Search,
   Settings,
@@ -163,6 +165,9 @@ export default function App() {
   const [sessionStats, setSessionStats] = useState<AgentSessionStats>();
   const [draft, setDraft] = useState("");
   const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const [editingMessageId, setEditingMessageId] = useState<string>();
+  const [editingText, setEditingText] = useState("");
+  const [editingSubmitting, setEditingSubmitting] = useState(false);
   const [previewImage, setPreviewImage] = useState<PreviewImage>();
   const [running, setRunning] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -250,6 +255,23 @@ export default function App() {
     }
   }, []);
 
+  const readAgentSnapshot = useCallback(async (): Promise<AgentSnapshot> => {
+    const [state, messageData, models, thinkingLevels, stats] = await Promise.all([
+      window.dscode.agent.command<Record<string, unknown>>("get_state"),
+      window.dscode.agent.command<{ messages: unknown[] }>("get_messages"),
+      window.dscode.agent.command<{ models: AgentSnapshot["models"] }>("get_available_models"),
+      window.dscode.agent.command<{ levels: string[] }>("get_available_thinking_levels"),
+      window.dscode.agent.command<AgentSessionStats>("get_session_stats").catch(() => undefined),
+    ]);
+    return {
+      state,
+      messages: messageData.messages,
+      models: models.models,
+      thinkingLevels: thinkingLevels.levels,
+      ...(stats ? { stats } : {}),
+    };
+  }, []);
+
   const openFilePreview = useCallback(async (filePath: string) => {
     const requestId = ++previewRequestRef.current;
     setContextCardOpen(false);
@@ -305,6 +327,9 @@ export default function App() {
     const providerStatuses = behavior?.providerStatuses ?? providers;
     const status = providerStatuses.find((candidate) => candidate.id === nextProvider);
     setUiRequest(undefined);
+    setEditingMessageId(undefined);
+    setEditingText("");
+    setEditingSubmitting(false);
     setActiveSession(sessionPath);
     activeCwdRef.current = cwd;
     setWorkspace(projectPath);
@@ -398,7 +423,9 @@ export default function App() {
             permission: "auto",
             sandbox: "workspace-write",
           });
-          if (!cancelled) hydrateSnapshot(snapshot);
+          if (!cancelled) {
+            hydrateSnapshot(snapshot);
+          }
         } catch (error) {
           if (!cancelled && !isAgentSessionClosedError(error)) {
             setToast({ message: cleanError(error instanceof Error ? error.message : String(error)), type: "error" });
@@ -580,18 +607,61 @@ export default function App() {
     await startAgent(session.cwd, session.path, undefined, projectPath);
   };
 
+  const editMessage = useCallback((message: ChatMessage) => {
+    if (running || editingMessageId) return;
+    setEditingMessageId(message.id);
+    setEditingText(message.text);
+  }, [editingMessageId, running]);
+
+  const cancelEditingMessage = useCallback(() => {
+    if (editingSubmitting) return;
+    setEditingMessageId(undefined);
+    setEditingText("");
+  }, [editingSubmitting]);
+
+  const submitEditingMessage = useCallback(async () => {
+    if (!editingMessageId || editingSubmitting || running) return;
+    const original = messages.find((message) => message.id === editingMessageId);
+    if (!original) return;
+    const text = editingText.trim();
+    const messageImages = original.images.map(({ data, mimeType }) => ({ data, mimeType }));
+    if (!text && messageImages.length === 0) return;
+    const images = messageImages.map((image) => ({ type: "image", ...image }));
+    setEditingSubmitting(true);
+    setRunning(true);
+    try {
+      await window.dscode.agent.command("prompt", { message: "/edit-last" });
+      const snapshot = await readAgentSnapshot();
+      hydrateSnapshot(snapshot);
+      setEditingMessageId(undefined);
+      setEditingText("");
+      setMessages((current) => [...current, optimisticUserMessage(text || t("composer.attachedImage"), false, messageImages)]);
+      await window.dscode.agent.command("prompt", {
+        message: text || t("composer.describeImage"),
+        ...(images.length ? { images } : {}),
+      });
+    } catch (error) {
+      setRunning(false);
+      if (!isAgentSessionClosedError(error)) {
+        setToast({ message: cleanError(error instanceof Error ? error.message : String(error)), type: "error" });
+      }
+    } finally {
+      setEditingSubmitting(false);
+    }
+  }, [editingMessageId, editingSubmitting, editingText, hydrateSnapshot, messages, readAgentSnapshot, running, t]);
+
   const sendMessage = async () => {
     const text = draft.trim();
     if (!text && attachments.length === 0) return;
     const alreadyRunning = running;
-    setDraft("");
     const queued = alreadyRunning;
     const messageImages = attachments.map(({ data, mimeType }) => ({ data, mimeType }));
-    setMessages((current) => [...current, optimisticUserMessage(text || t("composer.attachedImage"), queued, messageImages)]);
     const images = messageImages.map((image) => ({ type: "image", ...image }));
-    setAttachments([]);
     setRunning(true);
     try {
+      setDraft("");
+      setMessages((current) => [...current, optimisticUserMessage(text || t("composer.attachedImage"), queued, messageImages)]);
+      setAttachments([]);
       await window.dscode.agent.command(alreadyRunning ? "steer" : "prompt", {
         message: text || t("composer.describeImage"),
         ...(images.length ? { images } : {}),
@@ -735,6 +805,7 @@ export default function App() {
     void openFilePreview(filePath);
   }, [openFilePreview]);
   const conversationGroups = useMemo(() => groupConversation(messages), [messages]);
+  const editableUserMessageId = [...conversationGroups].reverse().find((group) => group.type === "user")?.id;
   const latestAssistantGroup = [...conversationGroups].reverse().find((group) => group.type === "assistant");
   const activeAssistantGroupId = running ? latestAssistantGroup?.id : undefined;
   const activeAssistantHasWork = latestAssistantGroup?.type === "assistant"
@@ -1000,7 +1071,20 @@ export default function App() {
                 <div className="messages">
                   {conversationGroups.map((group) => (
                     group.type === "user"
-                      ? <UserMessage key={group.id} message={group.message} onPreview={setPreviewImage} />
+                      ? <UserMessage
+                          key={group.id}
+                          message={group.message}
+                          onPreview={setPreviewImage}
+                          onEdit={editMessage}
+                          editable={group.id === editableUserMessageId}
+                          editing={editingMessageId === group.message.id}
+                          disabled={running}
+                          editingText={editingText}
+                          editingSubmitting={editingSubmitting}
+                          onEditChange={setEditingText}
+                          onEditSubmit={() => void submitEditingMessage()}
+                          onEditCancel={cancelEditingMessage}
+                        />
                       : <AssistantTurn
                           key={group.id}
                           messages={group.messages}
@@ -1359,27 +1443,151 @@ function EmptyState({ workspace, onSuggest }: { workspace?: string; onSuggest(va
   );
 }
 
-const UserMessage = memo(function UserMessage({ message, onPreview }: { message: ChatMessage; onPreview(image: PreviewImage): void }) {
+const UserMessage = memo(function UserMessage({
+  message,
+  onPreview,
+  onEdit,
+  editable,
+  editing,
+  disabled,
+  editingText,
+  editingSubmitting,
+  onEditChange,
+  onEditSubmit,
+  onEditCancel,
+}: {
+  message: ChatMessage;
+  onPreview(image: PreviewImage): void;
+  onEdit(message: ChatMessage): void;
+  editable: boolean;
+  editing: boolean;
+  disabled: boolean;
+  editingText: string;
+  editingSubmitting: boolean;
+  onEditChange(value: string): void;
+  onEditSubmit(): void;
+  onEditCancel(): void;
+}) {
   const { t } = useI18n();
+  const [copied, setCopied] = useState(false);
+
+  const copyMessage = async () => {
+    if (!message.text) return;
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(message.text);
+      } else {
+        const fallback = document.createElement("textarea");
+        fallback.value = message.text;
+        fallback.setAttribute("readonly", "true");
+        fallback.style.position = "fixed";
+        fallback.style.opacity = "0";
+        document.body.appendChild(fallback);
+        fallback.select();
+        document.execCommand("copy");
+        fallback.remove();
+      }
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1_200);
+    } catch {
+      setCopied(false);
+    }
+  };
+
   return (
-    <div className={`user-message${message.images.length > 0 ? " has-images" : ""}`}>
-      {message.images.length > 0 && (
-        <div className={`message-images${message.images.length > 1 ? " multiple" : ""}`}>
-          {message.images.map((image, index) => (
-            <button
-              type="button"
-              className="message-image-button"
-              key={`${image.mimeType}-${index}`}
-              onClick={() => onPreview({ ...image, alt: t("composer.imageNumber", { number: index + 1 }) })}
-              aria-label={t("composer.previewImage")}
-            >
-              <img src={imageDataUrl(image)} alt={t("composer.imageNumber", { number: index + 1 })} />
-            </button>
-          ))}
+    <div className={`user-message-row${editing ? " is-editing" : ""}`}>
+      <div className={`user-message${message.images.length > 0 ? " has-images" : ""}${editing ? " is-editing" : ""}`}>
+        {message.images.length > 0 && (
+          <div className={`message-images${message.images.length > 1 ? " multiple" : ""}`}>
+            {message.images.map((image, index) => (
+              <button
+                type="button"
+                className="message-image-button"
+                key={`${image.mimeType}-${index}`}
+                onClick={() => onPreview({ ...image, alt: t("composer.imageNumber", { number: index + 1 }) })}
+                aria-label={t("composer.previewImage")}
+              >
+                <img src={imageDataUrl(image)} alt={t("composer.imageNumber", { number: index + 1 })} />
+              </button>
+            ))}
+          </div>
+        )}
+        {editing ? (
+          <textarea
+            className="user-message-editor"
+            value={editingText}
+            onChange={(event) => onEditChange(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Escape") {
+                event.preventDefault();
+                onEditCancel();
+              } else if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+                event.preventDefault();
+                onEditSubmit();
+              }
+            }}
+            autoFocus
+            rows={Math.min(8, Math.max(2, editingText.split("\n").length))}
+            disabled={editingSubmitting}
+            aria-label={t("conversation.editMessage")}
+          />
+        ) : message.text ? <div className="user-message-text">{message.text}</div> : null}
+        {message.queued && <small>{t("status.queued")}</small>}
+      </div>
+      {(editable || message.text) && (
+        <div className="user-message-actions">
+          {editing ? (
+            <>
+              <button
+                type="button"
+                className="message-action-button message-cancel-button"
+                onClick={onEditCancel}
+                disabled={editingSubmitting}
+                title={t("common.cancel")}
+                aria-label={t("common.cancel")}
+              >
+                <X size={13} />
+              </button>
+              <button
+                type="button"
+                className="message-action-button message-submit-button"
+                onClick={onEditSubmit}
+                disabled={editingSubmitting || (!editingText.trim() && message.images.length === 0)}
+                title={t("composer.send")}
+                aria-label={t("composer.send")}
+              >
+                {editingSubmitting ? <LoaderCircle className="spin" size={13} /> : <ArrowUp size={13} />}
+              </button>
+            </>
+          ) : (
+            <>
+              {editable && (
+                <button
+                  type="button"
+                  className="message-action-button message-edit-button"
+                  onClick={() => onEdit(message)}
+                  disabled={disabled}
+                  title={t("conversation.editMessage")}
+                  aria-label={t("conversation.editMessage")}
+                >
+                  <Pencil size={13} />
+                </button>
+              )}
+              {message.text && (
+                <button
+                  type="button"
+                  className="message-action-button message-copy-button"
+                  onClick={() => void copyMessage()}
+                  title={copied ? t("conversation.messageCopied") : t("conversation.copyMessage")}
+                  aria-label={copied ? t("conversation.messageCopied") : t("conversation.copyMessage")}
+                >
+                  {copied ? <Check size={13} /> : <Copy size={13} />}
+                </button>
+              )}
+            </>
+          )}
         </div>
       )}
-      {message.text && <div className="user-message-text">{message.text}</div>}
-      {message.queued && <small>{t("status.queued")}</small>}
     </div>
   );
 });
