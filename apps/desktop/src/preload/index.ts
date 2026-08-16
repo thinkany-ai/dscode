@@ -44,6 +44,7 @@ const api: DesktopApi & { onAppCommand(listener: (command: string) => void): () 
     pin: (id, pinned) => ipcRenderer.invoke("sessions:pin", id, pinned),
     archive: (id) => ipcRenderer.invoke("sessions:archive", id),
     unarchive: (id) => ipcRenderer.invoke("sessions:unarchive", id),
+    delete: (id) => ipcRenderer.invoke("sessions:delete", id),
   },
   auth: {
     status: () => ipcRenderer.invoke("auth:status"),

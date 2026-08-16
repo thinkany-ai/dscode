@@ -129,6 +129,12 @@ export function getAssistantActivity(messages: ChatMessage[]): AssistantActivity
     : "thinking";
 }
 
+export function isAssistantTurnActive(messages: ChatMessage[]): boolean {
+  return messages.some((message) => (
+    message.streaming === true || message.tools.some((tool) => tool.status === "running")
+  ));
+}
+
 export function isStreamingAgentEvent(event: AgentEvent): boolean {
   return event.type === "message_update" || event.type === "tool_execution_update";
 }

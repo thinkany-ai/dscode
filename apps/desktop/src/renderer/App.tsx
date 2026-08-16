@@ -83,6 +83,7 @@ import {
   coalesceStreamingAgentEvents,
   getAssistantActivity,
   groupConversation,
+  isAssistantTurnActive,
   isStreamingAgentEvent,
   normalizeMessages,
   optimisticUserMessage,
@@ -607,6 +608,34 @@ export default function App() {
     await startAgent(session.cwd, session.path, undefined, projectPath);
   };
 
+  const deleteSession = useCallback(async (session: SessionSummary) => {
+    if (running) {
+      setToast({ message: t("status.cannotDeleteWhileRunning"), type: "error" });
+      return;
+    }
+    if (!window.confirm(t("sidebar.confirmDeleteSession", { title: session.title }))) return;
+    const wasActive = session.path === activeSession;
+    try {
+      if (wasActive) {
+        await window.dscode.agent.stop();
+        setRunning(false);
+        setMessages([]);
+        setActiveSession(undefined);
+      }
+      const deleted = await window.dscode.sessions.delete(session.id);
+      if (!deleted) throw new Error("The conversation could not be deleted");
+      setSessions((current) => current.filter((item) => item.id !== session.id));
+      if (wasActive) {
+        const projectPath = workspaces.some((item) => item.path === session.cwd) ? session.cwd : undefined;
+        await startAgent(session.cwd, undefined, undefined, projectPath);
+      } else {
+        await refreshSessions();
+      }
+    } catch (error) {
+      setToast({ message: cleanError(error instanceof Error ? error.message : String(error)), type: "error" });
+    }
+  }, [activeSession, refreshSessions, running, startAgent, t, workspaces]);
+
   const editMessage = useCallback((message: ChatMessage) => {
     if (running || editingMessageId) return;
     setEditingMessageId(message.id);
@@ -631,15 +660,19 @@ export default function App() {
     // programmatic jump as a new tail-following sequence for the resend.
     followingConversationTailRef.current = true;
     previousConversationScrollTopRef.current = 0;
+    // Leave the inline editor immediately. The session rewrite and snapshot
+    // reload happen asynchronously, so keeping this state would briefly
+    // render a large editing box above the replacement turn.
+    setEditingMessageId(undefined);
+    setEditingText("");
     setEditingSubmitting(true);
     setRunning(true);
     try {
       await window.dscode.agent.command("prompt", { message: "/edit-last" });
       const snapshot = await readAgentSnapshot();
       hydrateSnapshot(snapshot);
-      setEditingMessageId(undefined);
-      setEditingText("");
       setMessages((current) => [...current, optimisticUserMessage(text || t("composer.attachedImage"), false, messageImages)]);
+      setEditingSubmitting(false);
       await window.dscode.agent.command("prompt", {
         message: text || t("composer.describeImage"),
         ...(images.length ? { images } : {}),
@@ -811,9 +844,12 @@ export default function App() {
   const conversationGroups = useMemo(() => groupConversation(messages), [messages]);
   const editableUserMessageId = [...conversationGroups].reverse().find((group) => group.type === "user")?.id;
   const latestAssistantGroup = [...conversationGroups].reverse().find((group) => group.type === "assistant");
-  const activeAssistantGroupId = running ? latestAssistantGroup?.id : undefined;
-  const activeAssistantHasWork = latestAssistantGroup?.type === "assistant"
-    && splitAssistantTurn(latestAssistantGroup.messages, running).work.length > 0;
+  const activityRunning = running && !editingSubmitting;
+  const latestAssistantIsActive = activityRunning && latestAssistantGroup?.type === "assistant"
+    && isAssistantTurnActive(latestAssistantGroup.messages);
+  const activeAssistantGroupId = latestAssistantIsActive ? latestAssistantGroup?.id : undefined;
+  const activeAssistantHasWork = latestAssistantIsActive && latestAssistantGroup?.type === "assistant"
+    && splitAssistantTurn(latestAssistantGroup.messages, true).work.length > 0;
   const projectPaths = useMemo(() => new Set(workspaces.map((item) => item.path)), [workspaces]);
 
   const showPreviewPanel = () => {
@@ -951,15 +987,25 @@ export default function App() {
                     <div className="project-task-list">
                       {visibleTasks.length === 0 && <div className="project-task-empty">{t("sidebar.noProjectTasks")}</div>}
                       {visibleTasks.map((session) => (
-                        <button
-                          key={session.path}
-                          className={`project-task-row ${session.path === activeSession ? "active" : ""}`}
-                          onClick={() => void openSession(session)}
-                          title={session.title}
-                          aria-current={session.path === activeSession ? "page" : undefined}
-                        >
-                          <span>{session.title}</span>
-                        </button>
+                        <div className="session-row project-session-row" key={session.path}>
+                          <button
+                            className={`project-task-row ${session.path === activeSession ? "active" : ""}`}
+                            onClick={() => void openSession(session)}
+                            title={session.title}
+                            aria-current={session.path === activeSession ? "page" : undefined}
+                          >
+                            <SidebarSessionTitle>{session.title}</SidebarSessionTitle>
+                          </button>
+                          <button
+                            type="button"
+                            className="session-delete-button"
+                            onClick={() => void deleteSession(session)}
+                            aria-label={t("sidebar.deleteSession")}
+                            title={t("sidebar.deleteSession")}
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        </div>
                       ))}
                       {!query && taskSource.length > PROJECT_TASK_PREVIEW_COUNT && (
                         <button
@@ -988,14 +1034,24 @@ export default function App() {
           {recentSectionOpen && <>
             {recentTasks.length === 0 && <div className="sidebar-empty">{t("sidebar.noRecentTasks")}</div>}
             {recentTasks.map((session) => (
-              <button
-                key={session.path}
-                className={`thread-row recent-task-row ${session.path === activeSession ? "active" : ""}`}
-                onClick={() => void openSession(session)}
-              >
-                <span className="thread-copy"><strong>{session.title}</strong><small>{relativeTime(session.updatedAt, locale, t("status.now"))}</small></span>
-                <span className="task-dot" aria-hidden="true" />
-              </button>
+              <div className="session-row recent-session-row" key={session.path}>
+                <button
+                  className={`thread-row recent-task-row ${session.path === activeSession ? "active" : ""}`}
+                  onClick={() => void openSession(session)}
+                >
+                  <span className="thread-copy"><SidebarSessionTitle>{session.title}</SidebarSessionTitle><small>{relativeTime(session.updatedAt, locale, t("status.now"))}</small></span>
+                  <span className="task-dot" aria-hidden="true" />
+                </button>
+                <button
+                  type="button"
+                  className="session-delete-button"
+                  onClick={() => void deleteSession(session)}
+                  aria-label={t("sidebar.deleteSession")}
+                  title={t("sidebar.deleteSession")}
+                >
+                  <Trash2 size={14} />
+                </button>
+              </div>
             ))}
           </>}
         </div>
@@ -1097,7 +1153,7 @@ export default function App() {
                           onPreviewFile={handlePreviewFile}
                         />
                   ))}
-                  {running && !uiRequest && !activeAssistantHasWork && (
+                  {activityRunning && !uiRequest && !activeAssistantHasWork && (
                     <div className="work-log active" role="status" aria-live="polite">
                       <div className="work-log-summary work-log-status">
                         <LoaderCircle className="spin work-log-spinner" size={14} aria-hidden="true" />
@@ -2357,6 +2413,36 @@ function CommandPalette({ onClose, onNew, onOpen, onSettings, onInspector }: { o
     { label: t("command.openSettings"), icon: Settings, keys: "⌘,", run: onSettings },
   ].filter((command) => command.label.toLowerCase().includes(query.toLowerCase()));
   return <div className="modal-backdrop command-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><div className="command-palette"><label><Search size={17} /><input autoFocus value={query} onChange={(event) => setQuery(event.target.value)} placeholder={t("command.search")} /></label><div>{commands.map((command) => <button key={command.label} onClick={() => { command.run(); onClose(); }}><command.icon size={16} /><span>{command.label}</span><kbd>{command.keys}</kbd></button>)}</div></div></div>;
+}
+
+function SidebarSessionTitle({ children }: { children: string }) {
+  const viewportRef = useRef<HTMLSpanElement>(null);
+  const textRef = useRef<HTMLSpanElement>(null);
+  const [scrollDistance, setScrollDistance] = useState(0);
+
+  useEffect(() => {
+    const viewport = viewportRef.current;
+    const text = textRef.current;
+    if (!viewport || !text) return;
+    const measure = () => setScrollDistance(Math.max(0, text.scrollWidth - viewport.clientWidth));
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(viewport);
+    return () => observer.disconnect();
+  }, [children]);
+
+  return (
+    <span ref={viewportRef} className="session-title-viewport">
+      <span
+        ref={textRef}
+        className={`session-title-scroll${scrollDistance > 0 ? " is-overflowing" : ""}`}
+        style={{ "--session-title-distance": `${scrollDistance}px` } as CSSProperties}
+      >
+        {children}
+      </span>
+    </span>
+  );
 }
 
 function SessionSearchDialog({

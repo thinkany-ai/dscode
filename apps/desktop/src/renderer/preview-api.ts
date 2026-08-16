@@ -97,6 +97,7 @@ export function createPreviewApi(): DesktopApi {
       pin: async () => true,
       archive: async () => undefined,
       unarchive: async () => undefined,
+      delete: async () => true,
     },
     auth: {
       status: async () => [{ id: "deepseek", name: "DeepSeek", configured: true, source: "stored", defaultModel: "deepseek-v4-flash" }],

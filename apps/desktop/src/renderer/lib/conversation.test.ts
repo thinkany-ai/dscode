@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyAgentEvent, coalesceStreamingAgentEvents, getAssistantActivity, groupConversation, normalizeMessages, optimisticUserMessage, splitAssistantTurn } from "./conversation";
+import { applyAgentEvent, coalesceStreamingAgentEvents, getAssistantActivity, groupConversation, isAssistantTurnActive, normalizeMessages, optimisticUserMessage, splitAssistantTurn } from "./conversation";
 
 describe("conversation events", () => {
   it("coalesces high-frequency streaming updates by payload key", () => {
@@ -114,6 +114,19 @@ describe("conversation events", () => {
     }]);
 
     expect(getAssistantActivity(messages)).toBe("thinking");
+  });
+
+  it("does not treat a settled assistant snapshot as active work", () => {
+    const settled = normalizeMessages([{ role: "assistant", content: [{ type: "text", text: "Previous answer" }] }]);
+    expect(isAssistantTurnActive(settled)).toBe(false);
+
+    const runningTool = applyAgentEvent([], {
+      type: "tool_execution_start",
+      toolCallId: "call-1",
+      toolName: "exec_command",
+      args: { cmd: "rg --files" },
+    });
+    expect(isAssistantTurnActive(runningTool)).toBe(true);
   });
 
   it("keeps reasoning and tools in their original content order", () => {

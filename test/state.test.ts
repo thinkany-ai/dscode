@@ -89,6 +89,47 @@ describe("DSCode state index", () => {
       const restored = await store.unarchive("thread-1");
       expect(restored).toMatchObject({ archived: false, pinned: true, sessionPath: runtimePath });
       await expect(fs.stat(runtimePath)).resolves.toBeDefined();
+
+      await expect(store.delete("thread-1")).resolves.toBe(true);
+      await expect(fs.stat(runtimePath)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(fs.stat(storagePath)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(store.get("thread-1")).toBeUndefined();
+    } finally {
+      store.close();
+    }
+  });
+
+  it("deletes archived transcripts and their index record", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "dscode-state-delete-test-"));
+    temporaryDirectories.push(root);
+    const home = path.join(root, "home");
+    const sessions = path.join(home, "sessions");
+    const archived = path.join(home, "archived_sessions");
+    process.env.DSCODE_HOME = home;
+    process.env.DSCODE_SESSIONS_DIR = sessions;
+    process.env.DSCODE_ARCHIVED_SESSIONS_DIR = archived;
+    process.env.DSCODE_SQLITE_HOME = home;
+    await fs.mkdir(sessions, { recursive: true });
+    await fs.writeFile(
+      path.join(sessions, "thread-archived.jsonl"),
+      [
+        JSON.stringify({ type: "session", id: "thread-archived", cwd: root }),
+        JSON.stringify({ type: "message", message: { role: "user", content: "Remove this" } }),
+        "",
+      ].join("\n"),
+    );
+    await initializeDSCodeHome();
+
+    const store = new DSCodeStateStore(path.join(home, "state.sqlite"));
+    try {
+      await store.refresh();
+      const archivedThread = await store.archive("thread-archived");
+      expect(archivedThread?.archived).toBe(true);
+      const archivedPath = archivedThread!.storagePath;
+      await expect(fs.stat(archivedPath)).resolves.toBeDefined();
+      await expect(store.delete("thread-archived")).resolves.toBe(true);
+      await expect(fs.stat(archivedPath)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(store.list({ includeArchived: true })).toEqual([]);
     } finally {
       store.close();
     }

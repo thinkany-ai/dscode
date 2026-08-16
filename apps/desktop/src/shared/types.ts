@@ -211,6 +211,7 @@ export interface DesktopApi {
     pin(id: string, pinned: boolean): Promise<boolean>;
     archive(id: string): Promise<SessionSummary | undefined>;
     unarchive(id: string): Promise<SessionSummary | undefined>;
+    delete(id: string): Promise<boolean>;
   };
   auth: {
     status(): Promise<ProviderStatus[]>;

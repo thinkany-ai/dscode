@@ -18,7 +18,7 @@
   "main": "dist-electron/main/index.mjs",
   "scripts": {
     "build:core": "pnpm --dir ../../packages/core build",
-    "predev": "pnpm build:core",
+    "predev": "pnpm build:core && pnpm build:electron",
     "dev": "concurrently -k \"vite --host 127.0.0.1\" \"wait-on tcp:5173 && cross-env VITE_DEV_SERVER_URL=http://127.0.0.1:5173 electron .\"",
     "prebuild": "pnpm build:core",
     "build:electron": "tsup",

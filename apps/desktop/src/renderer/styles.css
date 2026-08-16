@@ -70,24 +70,36 @@ kbd { margin-left: auto; color: var(--faint); font-family: -apple-system, sans-s
 .project-row svg { flex: none; stroke-width: 1.65; }
 .project-row strong { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 13px; font-weight: 500; }
 .project-task-list { margin: 1px 0 4px; display: flex; flex-direction: column; gap: 1px; }
-.project-task-row { width: 100%; height: 32px; padding: 0 8px 0 32px; border-radius: 6px; display: flex; align-items: center; color: var(--tree-ink); text-align: left; }
+.session-row { min-width: 0; position: relative; display: flex; align-items: center; border-radius: 6px; }
+.session-row:hover, .session-row:focus-within { background: var(--tree-hover); }
+.project-task-row { width: 100%; min-width: 0; height: 32px; padding: 0 8px; border-radius: 6px; display: flex; align-items: center; color: var(--tree-ink); text-align: left; }
 .project-task-row:hover { background: var(--tree-hover); }
 .project-task-row.active { background: var(--tree-selected); }
-.project-task-row > span:first-child { min-width: 0; flex: 1; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 13px; font-weight: 430; }
-.project-task-empty { padding: 4px 8px 6px 32px; color: var(--tree-muted); font-size: 12px; line-height: 1.45; }
-.project-task-more { width: 100%; height: 30px; padding: 0 8px 0 32px; border-radius: 6px; color: var(--tree-muted); font-size: 12px; text-align: left; }
+.session-title-viewport { min-width: 0; flex: 1; overflow: hidden; display: block; white-space: nowrap; }
+.session-title-scroll { display: inline-block; min-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.session-title-scroll.is-overflowing { text-overflow: clip; }
+.session-row:hover .session-title-scroll.is-overflowing, .session-row:focus-within .session-title-scroll.is-overflowing { animation: session-title-marquee 5.5s ease-in-out infinite alternate; }
+.session-delete-button { width: 38px; height: 30px; position: absolute; z-index: 1; top: 50%; right: 0; display: grid; place-items: center; border: 1px solid color-mix(in srgb, var(--line) 86%, transparent); border-right: 0; border-radius: 7px 0 0 7px; color: var(--ink); background: color-mix(in srgb, var(--sidebar) 96%, var(--surface)); -webkit-backdrop-filter: blur(9px) saturate(1.08); backdrop-filter: blur(9px) saturate(1.08); box-shadow: -10px 0 15px color-mix(in srgb, var(--sidebar) 68%, transparent), inset 1px 0 0 color-mix(in srgb, white 28%, transparent); opacity: 0; pointer-events: none; transform: translateY(-50%); transition: opacity .12s ease, color .12s ease, background-color .12s ease; }
+.session-row:hover .session-delete-button, .session-row:focus-within .session-delete-button { opacity: 1; pointer-events: auto; }
+.session-delete-button:hover, .session-delete-button:focus-visible { color: var(--ink); background: color-mix(in srgb, var(--hover) 82%, var(--sidebar)); }
+.project-task-empty { padding: 4px 8px 6px; color: var(--tree-muted); font-size: 12px; line-height: 1.45; }
+.project-task-more { width: 100%; height: 30px; padding: 0 8px; border-radius: 6px; color: var(--tree-muted); font-size: 12px; text-align: left; }
 .project-task-more:hover { background: var(--tree-hover); color: var(--tree-ink); }
-.thread-row { width: 100%; min-height: 34px; padding: 4px 7px; border-radius: 6px; display: flex; align-items: center; gap: 8px; color: var(--tree-ink); text-align: left; margin: 0; }
+.thread-row { width: 100%; min-width: 0; min-height: 34px; padding: 4px 7px; border-radius: 6px; display: flex; align-items: center; gap: 8px; color: var(--tree-ink); text-align: left; margin: 0; }
 .thread-row:hover { background: var(--tree-hover); }
 .thread-row.active { background: var(--tree-selected); }
 .thread-copy { flex: 1; min-width: 0; display: flex; align-items: baseline; gap: 7px; }
-.thread-copy strong { min-width: 0; flex: 1; font-size: 12.5px; font-weight: 480; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.thread-copy .session-title-viewport { font-size: 12.5px; font-weight: 480; }
 .thread-copy small { color: var(--tree-muted); font-size: 10.5px; flex: none; }
 .thread-more { opacity: 0; }
 .thread-row:hover .thread-more { opacity: 1; }
 .recent-task-row { padding-left: 8px; }
 .task-dot { width: 6px; height: 6px; flex: none; border-radius: 50%; background: var(--focus); opacity: 0; box-shadow: 0 0 0 2px color-mix(in srgb, var(--focus) 10%, transparent); }
 .recent-task-row.active .task-dot { opacity: 1; }
+@keyframes session-title-marquee {
+  0%, 18% { transform: translateX(0); }
+  82%, 100% { transform: translateX(calc(var(--session-title-distance) * -1)); }
+}
 .sidebar-empty { padding: 8px; color: var(--tree-muted); font-size: 12px; line-height: 1.5; }
 .sidebar-footer { position: relative; border-top: 1px solid color-mix(in srgb, var(--line) 82%, transparent); padding: 7px 8px 9px; }
 .sidebar-account-button { width: 100%; height: 40px; display: flex; align-items: center; gap: 9px; padding: 0 8px; border-radius: 9px; color: var(--ink); text-align: left; }

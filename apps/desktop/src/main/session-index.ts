@@ -33,6 +33,10 @@ export async function unarchiveSession(id: string): Promise<SessionSummary | und
   });
 }
 
+export async function deleteSession(id: string): Promise<boolean> {
+  return withStore((store) => store.delete(id));
+}
+
 function toSessionSummary(thread: Awaited<ReturnType<typeof listDSCodeThreads>>[number]): SessionSummary {
   return {
     path: thread.sessionPath,
