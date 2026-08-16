@@ -1,4 +1,5 @@
 import {
+  memo,
   useCallback,
   useEffect,
   useMemo,
@@ -56,6 +57,7 @@ import {
   X,
 } from "lucide-react";
 import type {
+  AgentEvent,
   AgentSnapshot,
   AgentSessionStats,
   AuthUiEvent,
@@ -76,8 +78,10 @@ import type {
 import { AUTH_PROMPT_CANCEL_VALUE } from "../shared/types";
 import {
   applyAgentEvent,
+  coalesceStreamingAgentEvents,
   getAssistantActivity,
   groupConversation,
+  isStreamingAgentEvent,
   normalizeMessages,
   optimisticUserMessage,
   splitAssistantTurn,
@@ -191,6 +195,32 @@ export default function App() {
   const sidebarFooterRef = useRef<HTMLDivElement>(null);
   const previewRequestRef = useRef(0);
   const inspectorResizeCleanupRef = useRef<() => void>(() => undefined);
+  const pendingAgentEventsRef = useRef<AgentEvent[]>([]);
+  const pendingAgentFrameRef = useRef<number | undefined>(undefined);
+  const previewFileCandidatesRef = useRef<string[]>([]);
+
+  const flushPendingAgentEvents = useCallback(() => {
+    const frame = pendingAgentFrameRef.current;
+    if (frame !== undefined) window.cancelAnimationFrame(frame);
+    pendingAgentFrameRef.current = undefined;
+    const pending = pendingAgentEventsRef.current;
+    if (pending.length === 0) return;
+    pendingAgentEventsRef.current = [];
+    const events = coalesceStreamingAgentEvents(pending);
+    setMessages((current) => events.reduce((next, event) => applyAgentEvent(next, event), current));
+  }, []);
+
+  const enqueueAgentEvent = useCallback((event: AgentEvent) => {
+    if (!isStreamingAgentEvent(event)) {
+      flushPendingAgentEvents();
+      setMessages((current) => applyAgentEvent(current, event));
+      return;
+    }
+    pendingAgentEventsRef.current.push(event);
+    if (pendingAgentFrameRef.current === undefined) {
+      pendingAgentFrameRef.current = window.requestAnimationFrame(flushPendingAgentEvents);
+    }
+  }, [flushPendingAgentEvents]);
 
   const hydrateSnapshot = useCallback((snapshot: AgentSnapshot) => {
     setMessages(normalizeMessages(snapshot.messages));
@@ -399,7 +429,7 @@ export default function App() {
           setUiRequest(request);
         }
       }
-      setMessages((current) => applyAgentEvent(current, event));
+      enqueueAgentEvent(event);
     });
     const offError = window.dscode.agent.onError((message) => {
       if (isAgentSessionClosedError(message)) return;
@@ -425,8 +455,12 @@ export default function App() {
       offError();
       offAuth();
       offCommand?.();
+      const frame = pendingAgentFrameRef.current;
+      if (frame !== undefined) window.cancelAnimationFrame(frame);
+      pendingAgentFrameRef.current = undefined;
+      pendingAgentEventsRef.current = [];
     };
-  }, [refreshSessionStats, refreshSessions, t]);
+  }, [enqueueAgentEvent, refreshSessionStats, refreshSessions, t]);
 
   useEffect(() => {
     if (!accountMenuOpen) return;
@@ -654,7 +688,6 @@ export default function App() {
     setThemes(await window.dscode.themes.list());
   };
 
-  const allTools = useMemo(() => messages.flatMap((message) => message.tools), [messages]);
   const previewFileCandidates = useMemo(() => {
     const seen = new Set<string>();
     const files: string[] = [];
@@ -676,12 +709,11 @@ export default function App() {
       }
       if (files.length === 6) break;
     }
-    for (const tool of [...allTools].reverse()) {
-      addFile(toolFilePath(tool));
-      if (files.length === 6) break;
-    }
+    const previous = previewFileCandidatesRef.current;
+    if (sameStringArray(previous, files)) return previous;
+    previewFileCandidatesRef.current = files;
     return files;
-  }, [activeSession, allTools, messages, workspace]);
+  }, [activeSession, messages, workspace]);
 
   useEffect(() => {
     let cancelled = false;
@@ -698,7 +730,10 @@ export default function App() {
         if (!cancelled) setRecentPreviewFiles([]);
       });
     return () => { cancelled = true; };
-  }, [previewFileCandidates]);
+  }, [activeSession, previewFileCandidates, workspace]);
+  const handlePreviewFile = useCallback((filePath: string) => {
+    void openFilePreview(filePath);
+  }, [openFilePreview]);
   const conversationGroups = useMemo(() => groupConversation(messages), [messages]);
   const latestAssistantGroup = [...conversationGroups].reverse().find((group) => group.type === "assistant");
   const activeAssistantGroupId = running ? latestAssistantGroup?.id : undefined;
@@ -971,7 +1006,7 @@ export default function App() {
                           messages={group.messages}
                           active={group.id === activeAssistantGroupId}
                           showReasoningProcess={showReasoningProcess}
-                          onPreviewFile={(filePath) => void openFilePreview(filePath)}
+                          onPreviewFile={handlePreviewFile}
                         />
                   ))}
                   {running && !uiRequest && !activeAssistantHasWork && (
@@ -1324,7 +1359,7 @@ function EmptyState({ workspace, onSuggest }: { workspace?: string; onSuggest(va
   );
 }
 
-function UserMessage({ message, onPreview }: { message: ChatMessage; onPreview(image: PreviewImage): void }) {
+const UserMessage = memo(function UserMessage({ message, onPreview }: { message: ChatMessage; onPreview(image: PreviewImage): void }) {
   const { t } = useI18n();
   return (
     <div className={`user-message${message.images.length > 0 ? " has-images" : ""}`}>
@@ -1347,7 +1382,7 @@ function UserMessage({ message, onPreview }: { message: ChatMessage; onPreview(i
       {message.queued && <small>{t("status.queued")}</small>}
     </div>
   );
-}
+});
 
 function ImageLightbox({ image, onClose }: { image: PreviewImage; onClose(): void }) {
   const { t } = useI18n();
@@ -1373,7 +1408,7 @@ function ImageLightbox({ image, onClose }: { image: PreviewImage; onClose(): voi
   );
 }
 
-function AssistantTurn({
+const AssistantTurn = memo(function AssistantTurn({
   messages,
   active,
   showReasoningProcess,
@@ -1405,7 +1440,13 @@ function AssistantTurn({
       ))}
     </article>
   );
-}
+}, (previous, next) => (
+  previous.active === next.active
+  && previous.showReasoningProcess === next.showReasoningProcess
+  && previous.onPreviewFile === next.onPreviewFile
+  && previous.messages.length === next.messages.length
+  && previous.messages.every((message, index) => message === next.messages[index])
+));
 
 function MarkdownContent({ text, className = "markdown-body", onPreviewFile }: { text: string; className?: string; onPreviewFile?(filePath: string): void }) {
   return (
@@ -2608,6 +2649,10 @@ async function fileToAttachment(file: File): Promise<Attachment> {
 
 function imageDataUrl(image: ChatImage): string {
   return image.data.startsWith("data:") ? image.data : `data:${image.mimeType};base64,${image.data}`;
+}
+
+function sameStringArray(left: string[], right: string[]): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
 }
 
 type Translator = ReturnType<typeof useI18n>["t"];

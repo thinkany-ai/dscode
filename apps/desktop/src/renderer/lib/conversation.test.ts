@@ -1,7 +1,21 @@
 import { describe, expect, it } from "vitest";
-import { applyAgentEvent, getAssistantActivity, groupConversation, normalizeMessages, optimisticUserMessage, splitAssistantTurn } from "./conversation";
+import { applyAgentEvent, coalesceStreamingAgentEvents, getAssistantActivity, groupConversation, normalizeMessages, optimisticUserMessage, splitAssistantTurn } from "./conversation";
 
 describe("conversation events", () => {
+  it("coalesces high-frequency streaming updates by payload key", () => {
+    const firstMessageUpdate = { type: "message_update", message: { role: "assistant", content: [{ type: "text", text: "A" }] } };
+    const secondMessageUpdate = { type: "message_update", message: { role: "assistant", content: [{ type: "text", text: "AB" }] } };
+    const firstToolUpdate = { type: "tool_execution_update", toolCallId: "tool-1", partialResult: "A" };
+    const secondToolUpdate = { type: "tool_execution_update", toolCallId: "tool-1", partialResult: "AB" };
+
+    expect(coalesceStreamingAgentEvents([
+      firstMessageUpdate,
+      firstToolUpdate,
+      secondMessageUpdate,
+      secondToolUpdate,
+    ])).toEqual([secondMessageUpdate, secondToolUpdate]);
+  });
+
   it("normalizes assistant text, thinking, and tool calls", () => {
     const messages = normalizeMessages([
       {

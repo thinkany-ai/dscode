@@ -129,6 +129,35 @@ export function getAssistantActivity(messages: ChatMessage[]): AssistantActivity
     : "thinking";
 }
 
+export function isStreamingAgentEvent(event: AgentEvent): boolean {
+  return event.type === "message_update" || event.type === "tool_execution_update";
+}
+
+/** Keep only the latest payload for high-frequency streaming updates in a frame. */
+export function coalesceStreamingAgentEvents(events: AgentEvent[]): AgentEvent[] {
+  if (events.length < 2) return events;
+  const result: AgentEvent[] = [];
+  for (const event of events) {
+    const key = streamingEventKey(event);
+    if (key) {
+      for (let index = result.length - 1; index >= 0; index -= 1) {
+        if (streamingEventKey(result[index]!) === key) {
+          result.splice(index, 1);
+          break;
+        }
+      }
+    }
+    result.push(event);
+  }
+  return result;
+}
+
+function streamingEventKey(event: AgentEvent): string | undefined {
+  if (event.type === "message_update") return "message_update";
+  if (event.type !== "tool_execution_update" || typeof event.toolCallId !== "string") return undefined;
+  return `tool_execution_update:${event.toolCallId}`;
+}
+
 export function applyAgentEvent(messages: ChatMessage[], event: AgentEvent): ChatMessage[] {
   if (event.type === "message_start" || event.type === "message_update" || event.type === "message_end") {
     const raw = isRecord(event.message) ? event.message : undefined;
