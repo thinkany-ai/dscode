@@ -45,9 +45,11 @@ function options(): DSCodeRuntimeOptions {
     transport: "responses",
     harness: "minimal",
     permission: "auto",
+    effortExplicit: false,
     sandbox: "workspace-write",
     network: false,
     webSearch: false,
+    route: "auto",
     activeTools: ["update_plan", "exec_command", "write_stdin", "apply_patch"],
     toolsExplicit: false,
   };

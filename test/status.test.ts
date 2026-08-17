@@ -1,6 +1,7 @@
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import type { Usage } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
+import { createRoutePhaseState, createRouteState } from "../packages/core/src/route-profile.js";
 import { formatStatusReport, summarizeSessionUsage } from "../packages/core/src/status.js";
 
 function usage(input: number, output: number, cacheRead = 0, cacheWrite = 0): Usage {
@@ -42,6 +43,7 @@ describe("/status", () => {
   });
 
   it("explains the stats that are hidden from the default footer", () => {
+    const route = createRouteState("repair-react", "auto", "repair/debug keywords", 0.75);
     const report = formatStatusReport({
       provider: "deepseek",
       model: "deepseek-v4-flash",
@@ -52,6 +54,8 @@ describe("/status", () => {
       network: false,
       cwd: "/work/dscode",
       branch: "main",
+      route,
+      routePhase: createRoutePhaseState(route, 1),
       context: { tokens: 59_000, contextWindow: 1_000_000, percent: 5.9 },
       entries,
     });
@@ -59,5 +63,6 @@ describe("/status", () => {
     expect(report).toContain("59k / 1.0M");
     expect(report).toContain("3.2k uncached input");
     expect(report).toContain("network blocked");
+    expect(report).toContain("route      repair react · auto · 75% · repair/debug keywords · thinking high · working · turn 1");
   });
 });

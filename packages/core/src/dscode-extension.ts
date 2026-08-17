@@ -55,6 +55,29 @@ import { discoverProjectCommands } from "./project-profile.js";
 import { registerDSCodeProjectTrust } from "./project-trust.js";
 import { defaultModelForProvider } from "./providers.js";
 import { composePersonalizedSystemPrompt, loadPersonalizationPrompt } from "./personalization.js";
+import {
+  classifyRoute,
+  createRoutePhaseState,
+  createRouteState,
+  formatRoutePhaseStatus,
+  formatRouteStatus,
+  isOpeningRouteTurn,
+  parseRouteSelection,
+  restoreRoutePhaseState,
+  restoreRouteState,
+  routeCommandUsage,
+  routePhaseTraceAttributes,
+  routeProfileLabel,
+  routeProfileShortLabel,
+  routeStateTraceAttributes,
+  routeSystemPrompt,
+  routeThinkingBoost,
+  ROUTE_PHASE_ENTRY,
+  ROUTE_STATE_ENTRY,
+  type RoutePhaseState,
+  type RouteState,
+  type RouteThinkingTarget,
+} from "./route-profile.js";
 import type { DSCodeRuntimeOptions } from "./runtime-options.js";
 import { executeSandboxedCommand, sandboxDescription } from "./sandbox.js";
 import { registerSessionCommands } from "./session-commands.js";
@@ -158,6 +181,9 @@ export function createDSCodeExtension(inputOptions: DSCodeRuntimeOptions): Inlin
       let sessionPartition = Promise.resolve();
       let planState: PlanState | undefined;
       let lastOfferedPlanRevision = 0;
+      let routeState: RouteState | undefined;
+      let routePhaseState: RoutePhaseState | undefined;
+      let effortManuallyChanged = options.effortExplicit;
       const access = new SessionAccessController(options.sandbox, options.network);
       const trace = new AgentRuntimeTrace();
       const fixturePath = process.env.DSCODE_FIXTURE_PATH?.trim();
@@ -186,7 +212,8 @@ export function createDSCodeExtension(inputOptions: DSCodeRuntimeOptions): Inlin
 
       const updateStatus = (ctx: ExtensionContext): void => {
         const currentAccess = effectiveAccess();
-        const status = `DSCode · ${permission} · ${sandboxDescription({
+        const routeSegment = routeState ? ` · ${routeProfileShortLabel(routeState.profile)}` : "";
+        const status = `DSCode · ${permission}${routeSegment} · ${sandboxDescription({
           mode: currentAccess.sandbox,
           network: currentAccess.network,
         })}`;
@@ -251,9 +278,54 @@ export function createDSCodeExtension(inputOptions: DSCodeRuntimeOptions): Inlin
         }
       };
 
+      const classifyCurrentRoute = (prompt: unknown, ctx: ExtensionContext): RouteState =>
+        classifyRoute({
+          prompt,
+          entries: ctx.sessionManager.getBranch(),
+          providerId: ctx.model?.provider ?? options.providerId,
+          modelId: ctx.model?.id ?? options.modelId,
+          harness: options.harness,
+          permission,
+          projectCommands,
+        });
+
+      const ensureRouteState = (prompt: unknown, ctx: ExtensionContext): RouteState => {
+        if (routeState) return routeState;
+        routeState = classifyCurrentRoute(prompt, ctx);
+        pi.appendEntry(ROUTE_STATE_ENTRY, routeState);
+        updateStatus(ctx);
+        return routeState;
+      };
+
+      const beginRouteTurn = (state: RouteState, openingTurn: boolean): RoutePhaseState => {
+        const turnsStarted = openingTurn
+          ? 1
+          : Math.max(1, routePhaseState?.turnsStarted ?? 1) + 1;
+        routePhaseState = createRoutePhaseState(state, turnsStarted);
+        pi.appendEntry(ROUTE_PHASE_ENTRY, routePhaseState);
+        return routePhaseState;
+      };
+
+      const resetRoutePhase = (state: RouteState): void => {
+        routePhaseState = createRoutePhaseState(state, 0);
+        pi.appendEntry(ROUTE_PHASE_ENTRY, routePhaseState);
+      };
+
+      const applyRouteThinkingBoost = (
+        state: RouteState,
+      ): RouteThinkingTarget | undefined => {
+        if (effortManuallyChanged) return undefined;
+        const current = pi.getThinkingLevel();
+        const boosted = routeThinkingBoost(current, state.profile);
+        if (!boosted || current === boosted) return undefined;
+        pi.setThinkingLevel(boosted as ThinkingLevel);
+        return boosted;
+      };
+
       pi.on("before_provider_request", (event, ctx) => {
         const spanId = nextTraceSpan("model");
         pendingModelSpans.push(spanId);
+        const routeAttributes = routeState ? routeStateTraceAttributes(routeState) : undefined;
         trace.record({
           type: "model_request",
           spanId,
@@ -261,6 +333,15 @@ export function createDSCodeExtension(inputOptions: DSCodeRuntimeOptions): Inlin
           provider: ctx.model?.provider ?? options.providerId,
           model: ctx.model?.id ?? options.modelId,
           input: summarizeValue(event.payload),
+          ...(routeAttributes
+            ? {
+                attributes: {
+                  ...routeAttributes,
+                  ...routePhaseTraceAttributes(routePhaseState),
+                  routeThinkingLevel: pi.getThinkingLevel(),
+                },
+              }
+            : {}),
         });
         if (ctx.model?.provider !== "deepseek" || options.transport !== "responses") return;
         return optimizeDeepSeekResponsesPayload(event.payload, { webSearch: options.webSearch });
@@ -299,9 +380,22 @@ export function createDSCodeExtension(inputOptions: DSCodeRuntimeOptions): Inlin
         trace.setSession(ctx.sessionManager.getSessionId());
         checkpoints.length = 0;
         undone.clear();
+        effortManuallyChanged = options.effortExplicit;
         projectCommands = await discoverProjectCommands(ctx.cwd);
-        restoreCheckpointState(ctx.sessionManager.getBranch(), checkpoints, undone);
-        planState = restorePlanState(ctx.sessionManager.getBranch());
+        const branch = ctx.sessionManager.getBranch();
+        restoreCheckpointState(branch, checkpoints, undone);
+        planState = restorePlanState(branch);
+        routeState = restoreRouteState(branch);
+        routePhaseState = restoreRoutePhaseState(branch);
+        if (
+          options.route !== "auto" &&
+          (routeState?.profile !== options.route || routeState.source !== "config")
+        ) {
+          routeState = createRouteState(options.route, "config", "configured route override", 1);
+          pi.appendEntry(ROUTE_STATE_ENTRY, routeState);
+          resetRoutePhase(routeState);
+        }
+        if (routeState) applyRouteThinkingBoost(routeState);
         lastOfferedPlanRevision = planState?.revision ?? 0;
         updateStatus(ctx);
         ctx.ui.setHiddenThinkingLabel(
@@ -358,6 +452,10 @@ export function createDSCodeExtension(inputOptions: DSCodeRuntimeOptions): Inlin
           provider: options.providerId,
           model: options.modelId,
         });
+        const selectedRoute = ensureRouteState(event.prompt, ctx);
+        const openingRouteTurn = isOpeningRouteTurn(selectedRoute, routePhaseState);
+        const currentRoutePhase = beginRouteTurn(selectedRoute, openingRouteTurn);
+        const boostedThinking = applyRouteThinkingBoost(selectedRoute);
         trace.record({
           type: "agent_start",
           spanId: `agent:${traceId}`,
@@ -365,13 +463,23 @@ export function createDSCodeExtension(inputOptions: DSCodeRuntimeOptions): Inlin
           provider: ctx.model?.provider ?? options.providerId,
           model: ctx.model?.id ?? options.modelId,
           input: summarizeValue(event.prompt),
-          attributes: { attachedImageCount: event.images?.length ?? 0 },
+          attributes: {
+            attachedImageCount: event.images?.length ?? 0,
+            ...routeStateTraceAttributes(selectedRoute),
+            ...routePhaseTraceAttributes(currentRoutePhase),
+            routeOpeningTurn: openingRouteTurn,
+            routeThinkingLevel: pi.getThinkingLevel(),
+            routeThinkingBoosted: Boolean(boostedThinking),
+          },
         });
         const currentAccess = effectiveAccess();
         const personalizationPrompt = await loadPersonalizationPrompt(options.personalizationFile);
         const systemPrompt = composePersonalizedSystemPrompt(
           event.systemPrompt,
-          engineeringInstructions(projectCommands, currentAccess),
+          [
+            engineeringInstructions(projectCommands, currentAccess),
+            routeSystemPrompt(selectedRoute, { openingTurn: openingRouteTurn }),
+          ].join("\n\n"),
           personalizationPrompt,
         );
         if (permission !== "plan") return { systemPrompt };
@@ -817,7 +925,56 @@ export function createDSCodeExtension(inputOptions: DSCodeRuntimeOptions): Inlin
             return;
           }
           pi.setThinkingLevel(value as ThinkingLevel);
+          effortManuallyChanged = true;
           ctx.ui.notify(`Thinking effort: ${pi.getThinkingLevel()}`, "info");
+        },
+      });
+
+      pi.registerCommand("route", {
+        description: "Show or set auto|bootstrap|standard|deep|repair route profile",
+        handler: async (args, ctx) => {
+          const value = args.trim();
+          if (!value || value === "status") {
+            ctx.ui.notify(
+              [
+                `route: ${formatRouteStatus(routeState)}`,
+                `phase: ${formatRoutePhaseStatus(routePhaseState)}`,
+                `thinking: ${pi.getThinkingLevel()}${effortManuallyChanged ? " (manual)" : ""}`,
+                routeCommandUsage(),
+              ].join("\n"),
+              "info",
+            );
+            return;
+          }
+
+          const selection = parseRouteSelection(value);
+          if (!selection) {
+            ctx.ui.notify(routeCommandUsage(), "warning");
+            return;
+          }
+
+          if (selection === "auto") {
+            const autoRoute = classifyCurrentRoute(undefined, ctx);
+            routeState = {
+              ...autoRoute,
+              reason: `manual auto reset · ${autoRoute.reason}`,
+            };
+          } else {
+            routeState = createRouteState(selection, "manual", "manual /route override", 1);
+          }
+          pi.appendEntry(ROUTE_STATE_ENTRY, routeState);
+          resetRoutePhase(routeState);
+          const boostedThinking = applyRouteThinkingBoost(routeState);
+          updateStatus(ctx);
+          const thinkingNote = boostedThinking
+            ? `thinking: ${pi.getThinkingLevel()} (route boosted)`
+            : effortManuallyChanged
+              ? `thinking: ${pi.getThinkingLevel()} (manual effort preserved)`
+              : `thinking: ${pi.getThinkingLevel()}`;
+          ctx.ui.notify(
+            `Route profile: ${routeProfileLabel(routeState.profile)}\n${formatRouteStatus(routeState)}\nphase: ${formatRoutePhaseStatus(routePhaseState)}\n${thinkingNote}`,
+            "info",
+          );
         },
       });
 
@@ -961,6 +1118,8 @@ export function createDSCodeExtension(inputOptions: DSCodeRuntimeOptions): Inlin
               branch: git?.stdout.trim() || undefined,
               sessionName: ctx.sessionManager.getSessionName(),
               sessionFile: ctx.sessionManager.getSessionFile() ?? undefined,
+              route: routeState,
+              routePhase: routePhaseState,
               context: usage
                 ? {
                     tokens: usage.tokens ?? 0,
@@ -986,6 +1145,8 @@ export function createDSCodeExtension(inputOptions: DSCodeRuntimeOptions): Inlin
               `transport: ${ctx.model?.api ?? options.transport}`,
               `image input: ${ctx.model?.input.includes("image") ? "supported" : "not supported"}`,
               `thinking: ${ctx.thinkingLevel ?? pi.getThinkingLevel()}`,
+              `route: ${formatRouteStatus(routeState)}`,
+              `route phase: ${formatRoutePhaseStatus(routePhaseState)}`,
               `permission: ${permission}`,
               `sandbox: ${sandboxDescription({
                 mode: currentAccess.sandbox,

@@ -1,6 +1,8 @@
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import type { Usage } from "@earendil-works/pi-ai";
 import type { PermissionMode } from "./config.js";
+import type { RoutePhaseState, RouteState } from "./route-profile.js";
+import { formatRoutePhaseStatus, formatRouteStatus } from "./route-profile.js";
 import { formatCwd } from "./welcome.js";
 
 export interface SessionUsageSummary {
@@ -24,6 +26,8 @@ export interface StatusReportDetails {
   branch?: string | undefined;
   sessionName?: string | undefined;
   sessionFile?: string | undefined;
+  route?: RouteState | undefined;
+  routePhase?: RoutePhaseState | undefined;
   context?: {
     tokens?: number | undefined;
     contextWindow: number;
@@ -76,6 +80,7 @@ export function formatStatusReport(details: StatusReportDetails): string {
     `model      ${details.provider}/${details.model} · ${details.effort} · ${details.transport}`,
     `workspace  ${workspace}`,
     `access     ${details.permission} · ${details.sandbox} · network ${details.network ? "enabled" : "blocked"}`,
+    `route      ${formatRouteStatus(details.route)} · ${formatRoutePhaseStatus(details.routePhase)}`,
     `context    ${context}`,
     `cache      ${cache}`,
     `tokens     ${formatTokenCount(usage.input)} uncached input · ${formatTokenCount(usage.output)} output`,
