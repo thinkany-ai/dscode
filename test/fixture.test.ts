@@ -93,7 +93,7 @@ describe("agent fixtures", () => {
       provider: "deepseek",
       model: "deepseek-v4-flash",
       responses: [
-        { content: [], stopReason: "aborted", delayMs: 1, errorMessage: "fixture cancelled" },
+        { content: [], stopReason: "aborted", delayMs: 10, errorMessage: "fixture cancelled" },
       ],
     };
     const replay = new AgentFixtureReplay(fixture);
