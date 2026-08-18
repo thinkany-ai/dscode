@@ -1784,13 +1784,14 @@ function WorkLog({
   }, [active]);
 
   const duration = workDuration(messages, active ? now : undefined);
+  const expanded = active || open;
   const latestWorkKey = timeline.at(-1)?.key;
   return (
-    <section className={`work-log ${open ? "open" : ""} ${active ? "active" : "complete"}`}>
+    <section className={`work-log ${expanded ? "open" : ""} ${active ? "active" : "complete"}`}>
       <button
         className="work-log-summary"
-        aria-expanded={open}
-        onClick={() => setOpen((value) => !value)}
+        aria-expanded={expanded}
+        onClick={() => { if (!active) setOpen((value) => !value); }}
       >
         {active && <LoaderCircle className="spin work-log-spinner" size={14} aria-hidden="true" />}
         <span aria-live="polite">
@@ -1803,7 +1804,7 @@ function WorkLog({
         {duration !== undefined && <time>{formatElapsed(duration)}</time>}
         <ChevronDown className="work-log-chevron" size={15} />
       </button>
-      {open && (
+      {expanded && (
         <div className="work-log-content">
           <div className="work-timeline">
             {timeline.map(({ message, item, key }) => {
