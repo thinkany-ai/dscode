@@ -591,10 +591,13 @@ export default function App() {
     return selected;
   };
 
-  const createNewThread = async () => {
+  const createNewThread = async (projectPath?: string) => {
     setMessages([]);
     setActiveSession(undefined);
-    await startAgent();
+    if (projectPath) {
+      setExpandedProjects((current) => new Set(current).add(projectPath));
+    }
+    await startAgent(projectPath, undefined, undefined, projectPath);
     textareaRef.current?.focus();
   };
 
@@ -992,15 +995,26 @@ export default function App() {
               const visibleTasks = showAll ? taskSource : taskSource.slice(0, PROJECT_TASK_PREVIEW_COUNT);
               return (
                 <div className="project-group" key={item.path}>
-                  <button
-                    className={`project-row ${workspace === item.path && !activeSession ? "active" : ""}`}
-                    onClick={() => toggleWorkspace(item)}
-                    title={item.path}
-                    aria-expanded={isExpanded}
-                  >
-                    {isExpanded ? <FolderOpen size={15} /> : <Folder size={15} />}
-                    <strong>{item.name}</strong>
-                  </button>
+                  <div className="project-row-shell">
+                    <button
+                      className={`project-row ${workspace === item.path && !activeSession ? "active" : ""}`}
+                      onClick={() => toggleWorkspace(item)}
+                      title={item.path}
+                      aria-expanded={isExpanded}
+                    >
+                      {isExpanded ? <FolderOpen size={15} /> : <Folder size={15} />}
+                      <strong>{item.name}</strong>
+                    </button>
+                    <button
+                      type="button"
+                      className="project-new-thread-button"
+                      onClick={() => void createNewThread(item.path)}
+                      aria-label={t("sidebar.newProjectThread", { project: item.name })}
+                      title={t("sidebar.newProjectThread", { project: item.name })}
+                    >
+                      <Plus size={14} />
+                    </button>
+                  </div>
                   {isExpanded && (
                     <div className="project-task-list">
                       {visibleTasks.length === 0 && <div className="project-task-empty">{t("sidebar.noProjectTasks")}</div>}

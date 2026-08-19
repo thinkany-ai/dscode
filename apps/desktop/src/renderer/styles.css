@@ -64,11 +64,15 @@ kbd { margin-left: auto; color: var(--faint); font-family: -apple-system, sans-s
 .section-toggle[aria-expanded="true"] svg { transform: rotate(90deg); }
 .section-label.recent-label { margin-top: 14px; }
 .project-group { margin: 0; }
+.project-row-shell { position: relative; }
 .project-row { width: 100%; height: 30px; padding: 0 8px; border-radius: 6px; display: flex; align-items: center; gap: 8px; color: var(--tree-ink); text-align: left; }
 .project-row:hover { background: var(--tree-hover); }
 .project-row.active { background: var(--tree-selected); }
 .project-row svg { flex: none; stroke-width: 1.65; }
 .project-row strong { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 13px; font-weight: 500; }
+.project-new-thread-button { width: 28px; height: 26px; position: absolute; z-index: 1; top: 50%; right: 3px; display: grid; place-items: center; border: 1px solid color-mix(in srgb, var(--line) 86%, transparent); border-radius: 6px; color: var(--ink); background: color-mix(in srgb, var(--sidebar) 96%, var(--surface)); -webkit-backdrop-filter: blur(9px) saturate(1.08); backdrop-filter: blur(9px) saturate(1.08); box-shadow: -8px 0 13px color-mix(in srgb, var(--sidebar) 68%, transparent), inset 1px 0 0 color-mix(in srgb, white 28%, transparent); opacity: 0; pointer-events: none; transform: translateY(-50%); transition: opacity .12s ease, color .12s ease, background-color .12s ease; }
+.project-row-shell:hover .project-new-thread-button, .project-row-shell:focus-within .project-new-thread-button { opacity: 1; pointer-events: auto; }
+.project-new-thread-button:hover, .project-new-thread-button:focus-visible { color: var(--ink); background: color-mix(in srgb, var(--hover) 82%, var(--sidebar)); }
 .project-task-list { margin: 1px 0 4px; display: flex; flex-direction: column; gap: 1px; }
 .session-row { min-width: 0; position: relative; display: flex; align-items: center; border-radius: 6px; }
 .session-row:hover, .session-row:focus-within { background: var(--tree-hover); }
