@@ -1,4 +1,5 @@
 import {
+  memo,
   useCallback,
   useEffect,
   useMemo,
@@ -22,6 +23,7 @@ import {
   CircleAlert,
   CircleStop,
   Code2,
+  Copy,
   ExternalLink,
   Eye,
   File as FileIcon,
@@ -45,6 +47,7 @@ import {
   Paperclip,
   PanelLeft,
   PanelRight,
+  Pencil,
   Plus,
   Search,
   Settings,
@@ -56,6 +59,7 @@ import {
   X,
 } from "lucide-react";
 import type {
+  AgentEvent,
   AgentSnapshot,
   AgentSessionStats,
   AuthUiEvent,
@@ -76,8 +80,10 @@ import type {
 import { AUTH_PROMPT_CANCEL_VALUE } from "../shared/types";
 import {
   applyAgentEvent,
+  coalesceStreamingAgentEvents,
   getAssistantActivity,
   groupConversation,
+  isStreamingAgentEvent,
   normalizeMessages,
   optimisticUserMessage,
   splitAssistantTurn,
@@ -159,6 +165,9 @@ export default function App() {
   const [sessionStats, setSessionStats] = useState<AgentSessionStats>();
   const [draft, setDraft] = useState("");
   const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const [editingMessageId, setEditingMessageId] = useState<string>();
+  const [editingText, setEditingText] = useState("");
+  const [editingSubmitting, setEditingSubmitting] = useState(false);
   const [previewImage, setPreviewImage] = useState<PreviewImage>();
   const [running, setRunning] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -180,6 +189,7 @@ export default function App() {
   const [sessionQuery, setSessionQuery] = useState("");
   const [toast, setToast] = useState<{ message: string; type: "info" | "error" }>();
   const [uiRequest, setUiRequest] = useState<ExtensionUiRequest>();
+  const [resumingUiRequest, setResumingUiRequest] = useState(false);
   const [authEvent, setAuthEvent] = useState<AuthUiEvent>();
   const authCancellationRef = useRef(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -191,6 +201,32 @@ export default function App() {
   const sidebarFooterRef = useRef<HTMLDivElement>(null);
   const previewRequestRef = useRef(0);
   const inspectorResizeCleanupRef = useRef<() => void>(() => undefined);
+  const pendingAgentEventsRef = useRef<AgentEvent[]>([]);
+  const pendingAgentFrameRef = useRef<number | undefined>(undefined);
+  const previewFileCandidatesRef = useRef<string[]>([]);
+
+  const flushPendingAgentEvents = useCallback(() => {
+    const frame = pendingAgentFrameRef.current;
+    if (frame !== undefined) window.cancelAnimationFrame(frame);
+    pendingAgentFrameRef.current = undefined;
+    const pending = pendingAgentEventsRef.current;
+    if (pending.length === 0) return;
+    pendingAgentEventsRef.current = [];
+    const events = coalesceStreamingAgentEvents(pending);
+    setMessages((current) => events.reduce((next, event) => applyAgentEvent(next, event), current));
+  }, []);
+
+  const enqueueAgentEvent = useCallback((event: AgentEvent) => {
+    if (!isStreamingAgentEvent(event)) {
+      flushPendingAgentEvents();
+      setMessages((current) => applyAgentEvent(current, event));
+      return;
+    }
+    pendingAgentEventsRef.current.push(event);
+    if (pendingAgentFrameRef.current === undefined) {
+      pendingAgentFrameRef.current = window.requestAnimationFrame(flushPendingAgentEvents);
+    }
+  }, [flushPendingAgentEvents]);
 
   const hydrateSnapshot = useCallback((snapshot: AgentSnapshot) => {
     setMessages(normalizeMessages(snapshot.messages));
@@ -218,6 +254,23 @@ export default function App() {
     } catch (error) {
       if (!isAgentSessionClosedError(error)) console.warn("Unable to refresh session statistics", error);
     }
+  }, []);
+
+  const readAgentSnapshot = useCallback(async (): Promise<AgentSnapshot> => {
+    const [state, messageData, models, thinkingLevels, stats] = await Promise.all([
+      window.dscode.agent.command<Record<string, unknown>>("get_state"),
+      window.dscode.agent.command<{ messages: unknown[] }>("get_messages"),
+      window.dscode.agent.command<{ models: AgentSnapshot["models"] }>("get_available_models"),
+      window.dscode.agent.command<{ levels: string[] }>("get_available_thinking_levels"),
+      window.dscode.agent.command<AgentSessionStats>("get_session_stats").catch(() => undefined),
+    ]);
+    return {
+      state,
+      messages: messageData.messages,
+      models: models.models,
+      thinkingLevels: thinkingLevels.levels,
+      ...(stats ? { stats } : {}),
+    };
   }, []);
 
   const openFilePreview = useCallback(async (filePath: string) => {
@@ -275,6 +328,9 @@ export default function App() {
     const providerStatuses = behavior?.providerStatuses ?? providers;
     const status = providerStatuses.find((candidate) => candidate.id === nextProvider);
     setUiRequest(undefined);
+    setEditingMessageId(undefined);
+    setEditingText("");
+    setEditingSubmitting(false);
     setActiveSession(sessionPath);
     activeCwdRef.current = cwd;
     setWorkspace(projectPath);
@@ -368,7 +424,9 @@ export default function App() {
             permission: "auto",
             sandbox: "workspace-write",
           });
-          if (!cancelled) hydrateSnapshot(snapshot);
+          if (!cancelled) {
+            hydrateSnapshot(snapshot);
+          }
         } catch (error) {
           if (!cancelled && !isAgentSessionClosedError(error)) {
             setToast({ message: cleanError(error instanceof Error ? error.message : String(error)), type: "error" });
@@ -384,7 +442,10 @@ export default function App() {
 
   useEffect(() => {
     const offEvent = window.dscode.agent.onEvent((event) => {
-      if (event.type === "agent_start") setRunning(true);
+      if (event.type === "agent_start") {
+        setResumingUiRequest(false);
+        setRunning(true);
+      }
       if (event.type === "agent_settled") {
         setRunning(false);
         setUiRequest(undefined);
@@ -396,14 +457,16 @@ export default function App() {
         if (request.method === "notify") {
           setToast({ message: request.message ?? t("app.notification"), type: request.notifyType === "error" ? "error" : "info" });
         } else if (["select", "confirm", "input", "editor"].includes(request.method)) {
+          setResumingUiRequest(false);
           setUiRequest(request);
         }
       }
-      setMessages((current) => applyAgentEvent(current, event));
+      enqueueAgentEvent(event);
     });
     const offError = window.dscode.agent.onError((message) => {
       if (isAgentSessionClosedError(message)) return;
       setRunning(false);
+      setResumingUiRequest(false);
       setUiRequest(undefined);
       setToast({ message: cleanError(message), type: "error" });
     });
@@ -425,8 +488,12 @@ export default function App() {
       offError();
       offAuth();
       offCommand?.();
+      const frame = pendingAgentFrameRef.current;
+      if (frame !== undefined) window.cancelAnimationFrame(frame);
+      pendingAgentFrameRef.current = undefined;
+      pendingAgentEventsRef.current = [];
     };
-  }, [refreshSessionStats, refreshSessions, t]);
+  }, [enqueueAgentEvent, refreshSessionStats, refreshSessions, t]);
 
   useEffect(() => {
     if (!accountMenuOpen) return;
@@ -524,10 +591,13 @@ export default function App() {
     return selected;
   };
 
-  const createNewThread = async () => {
+  const createNewThread = async (projectPath?: string) => {
     setMessages([]);
     setActiveSession(undefined);
-    await startAgent();
+    if (projectPath) {
+      setExpandedProjects((current) => new Set(current).add(projectPath));
+    }
+    await startAgent(projectPath, undefined, undefined, projectPath);
     textareaRef.current?.focus();
   };
 
@@ -546,18 +616,97 @@ export default function App() {
     await startAgent(session.cwd, session.path, undefined, projectPath);
   };
 
+  const deleteSession = useCallback(async (session: SessionSummary) => {
+    if (running) {
+      setToast({ message: t("status.cannotDeleteWhileRunning"), type: "error" });
+      return;
+    }
+    if (!window.confirm(t("sidebar.confirmDeleteSession", { title: session.title }))) return;
+    const wasActive = session.path === activeSession;
+    try {
+      if (wasActive) {
+        await window.dscode.agent.stop();
+        setRunning(false);
+        setMessages([]);
+        setActiveSession(undefined);
+      }
+      const deleted = await window.dscode.sessions.delete(session.id);
+      if (!deleted) throw new Error("The conversation could not be deleted");
+      setSessions((current) => current.filter((item) => item.id !== session.id));
+      if (wasActive) {
+        const projectPath = workspaces.some((item) => item.path === session.cwd) ? session.cwd : undefined;
+        await startAgent(session.cwd, undefined, undefined, projectPath);
+      } else {
+        await refreshSessions();
+      }
+    } catch (error) {
+      setToast({ message: cleanError(error instanceof Error ? error.message : String(error)), type: "error" });
+    }
+  }, [activeSession, refreshSessions, running, startAgent, t, workspaces]);
+
+  const editMessage = useCallback((message: ChatMessage) => {
+    if (running || editingMessageId) return;
+    setEditingMessageId(message.id);
+    setEditingText(message.text);
+  }, [editingMessageId, running]);
+
+  const cancelEditingMessage = useCallback(() => {
+    if (editingSubmitting) return;
+    setEditingMessageId(undefined);
+    setEditingText("");
+  }, [editingSubmitting]);
+
+  const submitEditingMessage = useCallback(async () => {
+    if (!editingMessageId || editingSubmitting || running) return;
+    const original = messages.find((message) => message.id === editingMessageId);
+    if (!original) return;
+    const text = editingText.trim();
+    const messageImages = original.images.map(({ data, mimeType }) => ({ data, mimeType }));
+    if (!text && messageImages.length === 0) return;
+    const images = messageImages.map((image) => ({ type: "image", ...image }));
+    // Replacing the session shortens the scrollable content. Treat that
+    // programmatic jump as a new tail-following sequence for the resend.
+    followingConversationTailRef.current = true;
+    previousConversationScrollTopRef.current = 0;
+    // Leave the inline editor immediately. The session rewrite and snapshot
+    // reload happen asynchronously, so keeping this state would briefly
+    // render a large editing box above the replacement turn.
+    setEditingMessageId(undefined);
+    setEditingText("");
+    setEditingSubmitting(true);
+    setRunning(true);
+    try {
+      await window.dscode.agent.command("prompt", { message: "/edit-last" });
+      const snapshot = await readAgentSnapshot();
+      hydrateSnapshot(snapshot);
+      setMessages((current) => [...current, optimisticUserMessage(text || t("composer.attachedImage"), false, messageImages)]);
+      setEditingSubmitting(false);
+      await window.dscode.agent.command("prompt", {
+        message: text || t("composer.describeImage"),
+        ...(images.length ? { images } : {}),
+      });
+    } catch (error) {
+      setRunning(false);
+      if (!isAgentSessionClosedError(error)) {
+        setToast({ message: cleanError(error instanceof Error ? error.message : String(error)), type: "error" });
+      }
+    } finally {
+      setEditingSubmitting(false);
+    }
+  }, [editingMessageId, editingSubmitting, editingText, hydrateSnapshot, messages, readAgentSnapshot, running, t]);
+
   const sendMessage = async () => {
     const text = draft.trim();
     if (!text && attachments.length === 0) return;
     const alreadyRunning = running;
-    setDraft("");
     const queued = alreadyRunning;
     const messageImages = attachments.map(({ data, mimeType }) => ({ data, mimeType }));
-    setMessages((current) => [...current, optimisticUserMessage(text || t("composer.attachedImage"), queued, messageImages)]);
     const images = messageImages.map((image) => ({ type: "image", ...image }));
-    setAttachments([]);
     setRunning(true);
     try {
+      setDraft("");
+      setMessages((current) => [...current, optimisticUserMessage(text || t("composer.attachedImage"), queued, messageImages)]);
+      setAttachments([]);
       await window.dscode.agent.command(alreadyRunning ? "steer" : "prompt", {
         message: text || t("composer.describeImage"),
         ...(images.length ? { images } : {}),
@@ -654,7 +803,6 @@ export default function App() {
     setThemes(await window.dscode.themes.list());
   };
 
-  const allTools = useMemo(() => messages.flatMap((message) => message.tools), [messages]);
   const previewFileCandidates = useMemo(() => {
     const seen = new Set<string>();
     const files: string[] = [];
@@ -676,12 +824,11 @@ export default function App() {
       }
       if (files.length === 6) break;
     }
-    for (const tool of [...allTools].reverse()) {
-      addFile(toolFilePath(tool));
-      if (files.length === 6) break;
-    }
+    const previous = previewFileCandidatesRef.current;
+    if (sameStringArray(previous, files)) return previous;
+    previewFileCandidatesRef.current = files;
     return files;
-  }, [activeSession, allTools, messages, workspace]);
+  }, [activeSession, messages, workspace]);
 
   useEffect(() => {
     let cancelled = false;
@@ -698,12 +845,32 @@ export default function App() {
         if (!cancelled) setRecentPreviewFiles([]);
       });
     return () => { cancelled = true; };
-  }, [previewFileCandidates]);
+  }, [activeSession, previewFileCandidates, workspace]);
+  const handlePreviewFile = useCallback((filePath: string) => {
+    void openFilePreview(filePath);
+  }, [openFilePreview]);
   const conversationGroups = useMemo(() => groupConversation(messages), [messages]);
+  const editableUserMessageId = [...conversationGroups].reverse().find((group) => group.type === "user")?.id;
   const latestAssistantGroup = [...conversationGroups].reverse().find((group) => group.type === "assistant");
-  const activeAssistantGroupId = running ? latestAssistantGroup?.id : undefined;
-  const activeAssistantHasWork = latestAssistantGroup?.type === "assistant"
-    && splitAssistantTurn(latestAssistantGroup.messages, running).work.length > 0;
+  const latestConversationGroup = conversationGroups.at(-1);
+  const latestAssistantPreview = latestAssistantGroup ? splitAssistantTurn(latestAssistantGroup.messages, false) : undefined;
+  const latestAssistantHasVisibleResponse = (latestAssistantPreview?.responses.length ?? 0) > 0;
+  const activityRunning = running && !editingSubmitting;
+  const latestAssistantIsActive = (
+    activityRunning
+    && latestConversationGroup?.type === "assistant"
+    && latestAssistantGroup?.type === "assistant"
+    && latestAssistantGroup.id === latestConversationGroup.id
+  ) || (
+    resumingUiRequest
+    && !latestAssistantHasVisibleResponse
+    && latestConversationGroup?.type === "assistant"
+    && latestAssistantGroup?.type === "assistant"
+    && latestAssistantGroup.id === latestConversationGroup.id
+  );
+  const activeAssistantGroupId = latestAssistantIsActive ? latestAssistantGroup?.id : undefined;
+  const activeAssistantHasWork = latestAssistantIsActive && latestAssistantGroup?.type === "assistant"
+    && splitAssistantTurn(latestAssistantGroup.messages, true).work.length > 0;
   const projectPaths = useMemo(() => new Set(workspaces.map((item) => item.path)), [workspaces]);
 
   const showPreviewPanel = () => {
@@ -828,28 +995,49 @@ export default function App() {
               const visibleTasks = showAll ? taskSource : taskSource.slice(0, PROJECT_TASK_PREVIEW_COUNT);
               return (
                 <div className="project-group" key={item.path}>
-                  <button
-                    className={`project-row ${workspace === item.path && !activeSession ? "active" : ""}`}
-                    onClick={() => toggleWorkspace(item)}
-                    title={item.path}
-                    aria-expanded={isExpanded}
-                  >
-                    {isExpanded ? <FolderOpen size={15} /> : <Folder size={15} />}
-                    <strong>{item.name}</strong>
-                  </button>
+                  <div className="project-row-shell">
+                    <button
+                      className={`project-row ${workspace === item.path && !activeSession ? "active" : ""}`}
+                      onClick={() => toggleWorkspace(item)}
+                      title={item.path}
+                      aria-expanded={isExpanded}
+                    >
+                      {isExpanded ? <FolderOpen size={15} /> : <Folder size={15} />}
+                      <strong>{item.name}</strong>
+                    </button>
+                    <button
+                      type="button"
+                      className="project-new-thread-button"
+                      onClick={() => void createNewThread(item.path)}
+                      aria-label={t("sidebar.newProjectThread", { project: item.name })}
+                      title={t("sidebar.newProjectThread", { project: item.name })}
+                    >
+                      <Plus size={14} />
+                    </button>
+                  </div>
                   {isExpanded && (
                     <div className="project-task-list">
                       {visibleTasks.length === 0 && <div className="project-task-empty">{t("sidebar.noProjectTasks")}</div>}
                       {visibleTasks.map((session) => (
-                        <button
-                          key={session.path}
-                          className={`project-task-row ${session.path === activeSession ? "active" : ""}`}
-                          onClick={() => void openSession(session)}
-                          title={session.title}
-                          aria-current={session.path === activeSession ? "page" : undefined}
-                        >
-                          <span>{session.title}</span>
-                        </button>
+                        <div className="session-row project-session-row" key={session.path}>
+                          <button
+                            className={`project-task-row ${session.path === activeSession ? "active" : ""}`}
+                            onClick={() => void openSession(session)}
+                            title={session.title}
+                            aria-current={session.path === activeSession ? "page" : undefined}
+                          >
+                            <SidebarSessionTitle>{session.title}</SidebarSessionTitle>
+                          </button>
+                          <button
+                            type="button"
+                            className="session-delete-button"
+                            onClick={() => void deleteSession(session)}
+                            aria-label={t("sidebar.deleteSession")}
+                            title={t("sidebar.deleteSession")}
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        </div>
                       ))}
                       {!query && taskSource.length > PROJECT_TASK_PREVIEW_COUNT && (
                         <button
@@ -878,14 +1066,24 @@ export default function App() {
           {recentSectionOpen && <>
             {recentTasks.length === 0 && <div className="sidebar-empty">{t("sidebar.noRecentTasks")}</div>}
             {recentTasks.map((session) => (
-              <button
-                key={session.path}
-                className={`thread-row recent-task-row ${session.path === activeSession ? "active" : ""}`}
-                onClick={() => void openSession(session)}
-              >
-                <span className="thread-copy"><strong>{session.title}</strong><small>{relativeTime(session.updatedAt, locale, t("status.now"))}</small></span>
-                <span className="task-dot" aria-hidden="true" />
-              </button>
+              <div className="session-row recent-session-row" key={session.path}>
+                <button
+                  className={`thread-row recent-task-row ${session.path === activeSession ? "active" : ""}`}
+                  onClick={() => void openSession(session)}
+                >
+                  <span className="thread-copy"><SidebarSessionTitle>{session.title}</SidebarSessionTitle><small>{relativeTime(session.updatedAt, locale, t("status.now"))}</small></span>
+                  <span className="task-dot" aria-hidden="true" />
+                </button>
+                <button
+                  type="button"
+                  className="session-delete-button"
+                  onClick={() => void deleteSession(session)}
+                  aria-label={t("sidebar.deleteSession")}
+                  title={t("sidebar.deleteSession")}
+                >
+                  <Trash2 size={14} />
+                </button>
+              </div>
             ))}
           </>}
         </div>
@@ -965,16 +1163,29 @@ export default function App() {
                 <div className="messages">
                   {conversationGroups.map((group) => (
                     group.type === "user"
-                      ? <UserMessage key={group.id} message={group.message} onPreview={setPreviewImage} />
+                      ? <UserMessage
+                          key={group.id}
+                          message={group.message}
+                          onPreview={setPreviewImage}
+                          onEdit={editMessage}
+                          editable={group.id === editableUserMessageId}
+                          editing={editingMessageId === group.message.id}
+                          disabled={running}
+                          editingText={editingText}
+                          editingSubmitting={editingSubmitting}
+                          onEditChange={setEditingText}
+                          onEditSubmit={() => void submitEditingMessage()}
+                          onEditCancel={cancelEditingMessage}
+                        />
                       : <AssistantTurn
                           key={group.id}
                           messages={group.messages}
                           active={group.id === activeAssistantGroupId}
                           showReasoningProcess={showReasoningProcess}
-                          onPreviewFile={(filePath) => void openFilePreview(filePath)}
+                          onPreviewFile={handlePreviewFile}
                         />
                   ))}
-                  {running && !uiRequest && !activeAssistantHasWork && (
+                  {latestAssistantIsActive && !uiRequest && !activeAssistantHasWork && (
                     <div className="work-log active" role="status" aria-live="polite">
                       <div className="work-log-summary work-log-status">
                         <LoaderCircle className="spin work-log-spinner" size={14} aria-hidden="true" />
@@ -986,8 +1197,14 @@ export default function App() {
                     <InlineExtensionRequest
                       key={uiRequest.id}
                       request={uiRequest}
-                      onDone={() => setUiRequest(undefined)}
-                      onError={(message) => setToast({ message, type: "error" })}
+                      onDone={() => {
+                        setUiRequest(undefined);
+                        setResumingUiRequest(true);
+                      }}
+                      onError={(message) => {
+                        setResumingUiRequest(false);
+                        setToast({ message, type: "error" });
+                      }}
                     />
                   )}
                 </div>
@@ -1324,30 +1541,154 @@ function EmptyState({ workspace, onSuggest }: { workspace?: string; onSuggest(va
   );
 }
 
-function UserMessage({ message, onPreview }: { message: ChatMessage; onPreview(image: PreviewImage): void }) {
+const UserMessage = memo(function UserMessage({
+  message,
+  onPreview,
+  onEdit,
+  editable,
+  editing,
+  disabled,
+  editingText,
+  editingSubmitting,
+  onEditChange,
+  onEditSubmit,
+  onEditCancel,
+}: {
+  message: ChatMessage;
+  onPreview(image: PreviewImage): void;
+  onEdit(message: ChatMessage): void;
+  editable: boolean;
+  editing: boolean;
+  disabled: boolean;
+  editingText: string;
+  editingSubmitting: boolean;
+  onEditChange(value: string): void;
+  onEditSubmit(): void;
+  onEditCancel(): void;
+}) {
   const { t } = useI18n();
+  const [copied, setCopied] = useState(false);
+
+  const copyMessage = async () => {
+    if (!message.text) return;
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(message.text);
+      } else {
+        const fallback = document.createElement("textarea");
+        fallback.value = message.text;
+        fallback.setAttribute("readonly", "true");
+        fallback.style.position = "fixed";
+        fallback.style.opacity = "0";
+        document.body.appendChild(fallback);
+        fallback.select();
+        document.execCommand("copy");
+        fallback.remove();
+      }
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1_200);
+    } catch {
+      setCopied(false);
+    }
+  };
+
   return (
-    <div className={`user-message${message.images.length > 0 ? " has-images" : ""}`}>
-      {message.images.length > 0 && (
-        <div className={`message-images${message.images.length > 1 ? " multiple" : ""}`}>
-          {message.images.map((image, index) => (
-            <button
-              type="button"
-              className="message-image-button"
-              key={`${image.mimeType}-${index}`}
-              onClick={() => onPreview({ ...image, alt: t("composer.imageNumber", { number: index + 1 }) })}
-              aria-label={t("composer.previewImage")}
-            >
-              <img src={imageDataUrl(image)} alt={t("composer.imageNumber", { number: index + 1 })} />
-            </button>
-          ))}
+    <div className={`user-message-row${editing ? " is-editing" : ""}`}>
+      <div className={`user-message${message.images.length > 0 ? " has-images" : ""}${editing ? " is-editing" : ""}`}>
+        {message.images.length > 0 && (
+          <div className={`message-images${message.images.length > 1 ? " multiple" : ""}`}>
+            {message.images.map((image, index) => (
+              <button
+                type="button"
+                className="message-image-button"
+                key={`${image.mimeType}-${index}`}
+                onClick={() => onPreview({ ...image, alt: t("composer.imageNumber", { number: index + 1 }) })}
+                aria-label={t("composer.previewImage")}
+              >
+                <img src={imageDataUrl(image)} alt={t("composer.imageNumber", { number: index + 1 })} />
+              </button>
+            ))}
+          </div>
+        )}
+        {editing ? (
+          <textarea
+            className="user-message-editor"
+            value={editingText}
+            onChange={(event) => onEditChange(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Escape") {
+                event.preventDefault();
+                onEditCancel();
+              } else if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+                event.preventDefault();
+                onEditSubmit();
+              }
+            }}
+            autoFocus
+            rows={Math.min(8, Math.max(2, editingText.split("\n").length))}
+            disabled={editingSubmitting}
+            aria-label={t("conversation.editMessage")}
+          />
+        ) : message.text ? <div className="user-message-text">{message.text}</div> : null}
+        {message.queued && <small>{t("status.queued")}</small>}
+      </div>
+      {(editable || message.text) && (
+        <div className="user-message-actions">
+          {editing ? (
+            <>
+              <button
+                type="button"
+                className="message-action-button message-cancel-button"
+                onClick={onEditCancel}
+                disabled={editingSubmitting}
+                title={t("common.cancel")}
+                aria-label={t("common.cancel")}
+              >
+                <X size={13} />
+              </button>
+              <button
+                type="button"
+                className="message-action-button message-submit-button"
+                onClick={onEditSubmit}
+                disabled={editingSubmitting || (!editingText.trim() && message.images.length === 0)}
+                title={t("composer.send")}
+                aria-label={t("composer.send")}
+              >
+                {editingSubmitting ? <LoaderCircle className="spin" size={13} /> : <ArrowUp size={13} />}
+              </button>
+            </>
+          ) : (
+            <>
+              {editable && (
+                <button
+                  type="button"
+                  className="message-action-button message-edit-button"
+                  onClick={() => onEdit(message)}
+                  disabled={disabled}
+                  title={t("conversation.editMessage")}
+                  aria-label={t("conversation.editMessage")}
+                >
+                  <Pencil size={13} />
+                </button>
+              )}
+              {message.text && (
+                <button
+                  type="button"
+                  className="message-action-button message-copy-button"
+                  onClick={() => void copyMessage()}
+                  title={copied ? t("conversation.messageCopied") : t("conversation.copyMessage")}
+                  aria-label={copied ? t("conversation.messageCopied") : t("conversation.copyMessage")}
+                >
+                  {copied ? <Check size={13} /> : <Copy size={13} />}
+                </button>
+              )}
+            </>
+          )}
         </div>
       )}
-      {message.text && <div className="user-message-text">{message.text}</div>}
-      {message.queued && <small>{t("status.queued")}</small>}
     </div>
   );
-}
+});
 
 function ImageLightbox({ image, onClose }: { image: PreviewImage; onClose(): void }) {
   const { t } = useI18n();
@@ -1373,7 +1714,7 @@ function ImageLightbox({ image, onClose }: { image: PreviewImage; onClose(): voi
   );
 }
 
-function AssistantTurn({
+const AssistantTurn = memo(function AssistantTurn({
   messages,
   active,
   showReasoningProcess,
@@ -1405,7 +1746,13 @@ function AssistantTurn({
       ))}
     </article>
   );
-}
+}, (previous, next) => (
+  previous.active === next.active
+  && previous.showReasoningProcess === next.showReasoningProcess
+  && previous.onPreviewFile === next.onPreviewFile
+  && previous.messages.length === next.messages.length
+  && previous.messages.every((message, index) => message === next.messages[index])
+));
 
 function MarkdownContent({ text, className = "markdown-body", onPreviewFile }: { text: string; className?: string; onPreviewFile?(filePath: string): void }) {
   return (
@@ -1441,7 +1788,8 @@ function WorkLog({
   const activity = getAssistantActivity(messages);
   const [open, setOpen] = useState(false);
   const [now, setNow] = useState(Date.now());
-  const expanded = active || open;
+  const latestWork = timeline.at(-1);
+  const latestWorkLabel = latestWorkSummary(latestWork, t);
 
   useEffect(() => {
     if (!active) return;
@@ -1450,19 +1798,19 @@ function WorkLog({
   }, [active]);
 
   const duration = workDuration(messages, active ? now : undefined);
+  const expanded = active || open;
   const latestWorkKey = timeline.at(-1)?.key;
   return (
     <section className={`work-log ${expanded ? "open" : ""} ${active ? "active" : "complete"}`}>
       <button
         className="work-log-summary"
         aria-expanded={expanded}
-        aria-disabled={active}
         onClick={() => { if (!active) setOpen((value) => !value); }}
       >
         {active && <LoaderCircle className="spin work-log-spinner" size={14} aria-hidden="true" />}
         <span aria-live="polite">
           {active
-            ? t(activity === "tool" ? "work.toolStatus" : "work.thinkingStatus")
+            ? latestWorkLabel ?? t(activity === "tool" ? "work.toolStatus" : "work.thinkingStatus")
             : failed
               ? t("work.processedErrors")
               : t("work.processed")}
@@ -1491,6 +1839,22 @@ function WorkLog({
       )}
     </section>
   );
+}
+
+function latestWorkSummary(entry: TurnWorkEntry | undefined, t: Translator): string | undefined {
+  if (!entry) return undefined;
+  if (entry.item.type === "tool") {
+    const toolId = entry.item.toolId;
+    const tool = entry.message.tools.find((candidate) => candidate.id === toolId);
+    return tool ? toolDisplayTitle(tool, t) : t("work.toolStatus");
+  }
+
+  const lines = entry.item.text
+    .split(/\r?\n/)
+    .map((line) => line.trim().replace(/\s+/g, " "))
+    .filter(Boolean);
+  const lastLine = lines.at(-1);
+  return lastLine ? crop(lastLine, 120) : undefined;
 }
 
 function ReasoningBlock({ text, active, autoExpand }: { text: string; active: boolean; autoExpand: boolean }) {
@@ -2090,6 +2454,36 @@ function CommandPalette({ onClose, onNew, onOpen, onSettings, onInspector }: { o
   return <div className="modal-backdrop command-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><div className="command-palette"><label><Search size={17} /><input autoFocus value={query} onChange={(event) => setQuery(event.target.value)} placeholder={t("command.search")} /></label><div>{commands.map((command) => <button key={command.label} onClick={() => { command.run(); onClose(); }}><command.icon size={16} /><span>{command.label}</span><kbd>{command.keys}</kbd></button>)}</div></div></div>;
 }
 
+function SidebarSessionTitle({ children }: { children: string }) {
+  const viewportRef = useRef<HTMLSpanElement>(null);
+  const textRef = useRef<HTMLSpanElement>(null);
+  const [scrollDistance, setScrollDistance] = useState(0);
+
+  useEffect(() => {
+    const viewport = viewportRef.current;
+    const text = textRef.current;
+    if (!viewport || !text) return;
+    const measure = () => setScrollDistance(Math.max(0, text.scrollWidth - viewport.clientWidth));
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(viewport);
+    return () => observer.disconnect();
+  }, [children]);
+
+  return (
+    <span ref={viewportRef} className="session-title-viewport">
+      <span
+        ref={textRef}
+        className={`session-title-scroll${scrollDistance > 0 ? " is-overflowing" : ""}`}
+        style={{ "--session-title-distance": `${scrollDistance}px` } as CSSProperties}
+      >
+        {children}
+      </span>
+    </span>
+  );
+}
+
 function SessionSearchDialog({
   sessions,
   workspaces,
@@ -2608,6 +3002,10 @@ async function fileToAttachment(file: File): Promise<Attachment> {
 
 function imageDataUrl(image: ChatImage): string {
   return image.data.startsWith("data:") ? image.data : `data:${image.mimeType};base64,${image.data}`;
+}
+
+function sameStringArray(left: string[], right: string[]): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
 }
 
 type Translator = ReturnType<typeof useI18n>["t"];

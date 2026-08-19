@@ -163,6 +163,8 @@ Return concise evidence, exact file paths, commands/checks, and any unresolved r
     readOnly ? "read-only" : "workspace-write",
     "--thinking",
     role === "explorer" ? "low" : "max",
+    "--route",
+    runtime.route,
     ...(runtime.network ? ["--network"] : []),
     ...(runtime.webSearch ? ["--web"] : []),
     rolePrompt,

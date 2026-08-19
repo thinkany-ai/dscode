@@ -35,6 +35,7 @@ import { AppSettings } from "./app-settings";
 import { listCodexThemes } from "./themes";
 import {
   archiveSession,
+  deleteSession,
   listSessions,
   setSessionPinned,
   unarchiveSession,
@@ -254,6 +255,7 @@ function registerIpc(): void {
   ipcMain.handle("sessions:pin", (_event, id: string, pinned: boolean) => setSessionPinned(id, pinned));
   ipcMain.handle("sessions:archive", (_event, id: string) => archiveSession(id));
   ipcMain.handle("sessions:unarchive", (_event, id: string) => unarchiveSession(id));
+  ipcMain.handle("sessions:delete", (_event, id: string) => deleteSession(id));
 
   ipcMain.handle("auth:status", async (): Promise<ProviderStatus[]> => {
     const credentialStore = await createDSCodeCredentialStore();

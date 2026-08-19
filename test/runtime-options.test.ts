@@ -10,6 +10,7 @@ describe("parseRuntimeArgs", () => {
     harness: process.env.DSCODE_HARNESS,
     permission: process.env.DSCODE_PERMISSION,
     sandbox: process.env.DSCODE_SANDBOX,
+    route: process.env.DSCODE_ROUTE,
   };
 
   beforeEach(() => {
@@ -24,6 +25,7 @@ describe("parseRuntimeArgs", () => {
     restore("DSCODE_HARNESS", original.harness);
     restore("DSCODE_PERMISSION", original.permission);
     restore("DSCODE_SANDBOX", original.sandbox);
+    restore("DSCODE_ROUTE", original.route);
   });
 
   it("injects the DeepSeek provider, max thinking, and selects minimal agent tools", () => {
@@ -33,6 +35,7 @@ describe("parseRuntimeArgs", () => {
     delete process.env.DSCODE_HARNESS;
     delete process.env.DSCODE_PERMISSION;
     delete process.env.DSCODE_SANDBOX;
+    delete process.env.DSCODE_ROUTE;
     const parsed = parseRuntimeArgs(["--print", "inspect this repo"]);
 
     expect(parsed.options).toMatchObject({
@@ -41,7 +44,9 @@ describe("parseRuntimeArgs", () => {
       transport: "responses",
       harness: "minimal",
       permission: "auto",
+      effortExplicit: false,
       sandbox: "workspace-write",
+      route: "auto",
       activeTools: ["update_plan", "exec_command", "write_stdin", "apply_patch", "delegate"],
       toolsExplicit: false,
     });
@@ -118,6 +123,7 @@ describe("parseRuntimeArgs", () => {
     expect(parsed.options).toMatchObject({
       harness: "safe",
       permission: "ask",
+      effortExplicit: true,
       sandbox: "read-only",
       activeTools: [
         "update_plan",
@@ -142,6 +148,22 @@ describe("parseRuntimeArgs", () => {
     expect(parsed.options.activeTools).toEqual(["read_file", "mcp__fixture__echo"]);
     expect(parsed.options.toolsExplicit).toBe(true);
     expect(parsed.piArgs).not.toContain("--tools");
+  });
+
+  it("parses route profile flags and environment aliases", () => {
+    process.env.DSCODE_ROUTE = "repair";
+    expect(parseRuntimeArgs([]).options.route).toBe("repair-react");
+    expect(parseRuntimeArgs(["--route", "deep"]).options.route).toBe("deep-think");
+    expect(parseRuntimeArgs(["--route=标准"]).options.route).toBe("standard-executor");
+    expect(() => parseRuntimeArgs(["--route", "mystery"])).toThrow(
+      "--route must be auto|bootstrap|standard|deep|repair",
+    );
+  });
+
+  it("treats forwarded thinking flags as explicit effort", () => {
+    const parsed = parseRuntimeArgs(["--thinking", "low", "--print", "inspect"]);
+    expect(parsed.options.effortExplicit).toBe(true);
+    expect(parsed.piArgs).toEqual(expect.arrayContaining(["--thinking", "low"]));
   });
 
   it("maps YOLO mode to full access and one-run project trust", () => {

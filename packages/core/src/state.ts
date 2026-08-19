@@ -210,6 +210,21 @@ export class DSCodeStateStore {
     return this.get(id);
   }
 
+  async delete(id: string): Promise<boolean> {
+    const current = this.get(id);
+    if (!current) return false;
+
+    // Active sessions can have a compatibility hard link and a partitioned
+    // storage path. Remove each unique path before dropping the index row.
+    const paths = new Set([current.sessionPath, current.storagePath]);
+    for (const file of paths) {
+      await fs.unlink(file).catch((error) => {
+        if (!isNodeError(error) || error.code !== "ENOENT") throw error;
+      });
+    }
+    return this.database.prepare("DELETE FROM threads WHERE id = ?").run(id).changes > 0;
+  }
+
   private async indexFile(
     sessionPath: string,
     storagePath: string,

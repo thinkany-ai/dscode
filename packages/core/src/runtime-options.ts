@@ -23,6 +23,7 @@ import {
   SUPPORTED_PROVIDER_IDS,
   type SupportedProviderId,
 } from "./providers.js";
+import { parseRouteSelection, type RouteSelection } from "./route-profile.js";
 
 export const sandboxModeSchema = z.enum(["read-only", "workspace-write", "danger-full-access"]);
 export type SandboxMode = z.infer<typeof sandboxModeSchema>;
@@ -35,12 +36,15 @@ export interface DSCodeRuntimeOptions {
   transport: ModelTransport;
   harness: HarnessMode;
   permission: PermissionMode;
+  effortExplicit: boolean;
   sandbox: SandboxMode;
   network: boolean;
   webSearch: boolean;
+  route: RouteSelection;
   activeTools: string[];
   toolsExplicit: boolean;
   personalizationFile?: string;
+  fixtureCapturePath?: string;
 }
 
 export interface ParsedRuntimeArgs {
@@ -73,9 +77,11 @@ export function parseRuntimeArgs(argv: string[]): ParsedRuntimeArgs {
   let sandbox = sandboxModeSchema.parse(process.env.DSCODE_SANDBOX ?? "workspace-write");
   let network = false;
   let webSearch = false;
+  let route = parseSelection(process.env.DSCODE_ROUTE ?? "auto", "DSCODE_ROUTE");
   let activeTools: string[] | undefined;
   let toolsExplicit = false;
   const personalizationFile = process.env.DSCODE_PERSONALIZATION_FILE?.trim();
+  let fixtureCapturePath = process.env.DSCODE_FIXTURE_CAPTURE?.trim();
   let help = false;
   let version = false;
   let yolo = false;
@@ -111,6 +117,8 @@ export function parseRuntimeArgs(argv: string[]): ParsedRuntimeArgs {
       network = true;
     } else if (flag === "--web") {
       webSearch = true;
+    } else if (flag === "--route") {
+      route = parseSelection(takeValue(), "--route");
     } else if (flag === "--yes" || flag === "-y") {
       permission = "full";
       yolo = true;
@@ -129,6 +137,8 @@ export function parseRuntimeArgs(argv: string[]): ParsedRuntimeArgs {
     } else if (flag === "--no-tools") {
       activeTools = [];
       toolsExplicit = true;
+    } else if (flag === "--record-fixture") {
+      fixtureCapturePath = path.resolve(takeValue());
     } else if (flag === "--no-resume") {
       // Pi starts a new persisted session unless --continue/--resume is passed.
     } else if (flag === "--help" || flag === "-h") {
@@ -160,9 +170,11 @@ export function parseRuntimeArgs(argv: string[]): ParsedRuntimeArgs {
   }
   modelId ??= defaultModelForProvider(providerId);
   effort ??= defaultEffortForProvider(providerId);
+  const rawThinkingExplicit = hasFlag(forwarded, "--thinking");
+  const thinkingExplicit = effortExplicit || rawThinkingExplicit;
   forwarded.unshift("--provider", providerId);
   if (!hasFlag(forwarded, "--model")) forwarded.unshift("--model", modelId);
-  if (!hasFlag(forwarded, "--thinking")) forwarded.unshift("--thinking", effort);
+  if (!rawThinkingExplicit) forwarded.unshift("--thinking", effort);
   activeTools ??= defaultActiveTools(harness);
 
   return {
@@ -174,12 +186,15 @@ export function parseRuntimeArgs(argv: string[]): ParsedRuntimeArgs {
       transport,
       harness,
       permission,
+      effortExplicit: thinkingExplicit,
       sandbox,
       network,
       webSearch,
+      route,
       activeTools,
       toolsExplicit,
       ...(personalizationFile ? { personalizationFile: path.resolve(personalizationFile) } : {}),
+      ...(fixtureCapturePath ? { fixtureCapturePath: path.resolve(fixtureCapturePath) } : {}),
     },
     piArgs: forwarded,
     help,
@@ -209,6 +224,9 @@ export function printDSCodeHelp(): void {
 
 Usage:
   dscode [options] [prompt]
+  dscode replay <trace.jsonl> [--json]
+  dscode replay --execute <fixture.json> --prompt "task" [--json]
+  dscode evaluate <trace.jsonl> [--json] [budget options]
   dscode -p "task"                 Non-interactive text mode
   dscode --mode json -p "task"     JSONL/CI mode
   dscode --mode rpc                IDE/RPC server
@@ -225,8 +243,10 @@ DSCode options:
   --harness <minimal|safe>         Tool harness (default: minimal)
   --permission <mode>              plan|ask|auto|full (full grants host + network)
   --sandbox <mode>                 read-only|workspace-write|danger-full-access
+  --route <auto|bootstrap|standard|deep|repair>  Session route profile and thinking boost
   --network                        Pre-authorize command network access for this run
   --web                            Enable DeepSeek server-side web search
+  --record-fixture <file>          Explicitly capture assistant responses for offline replay
   -y, --yes                        YOLO: trust project, skip approvals, allow host + network
 
 Session and editor features:
@@ -236,7 +256,13 @@ Session and editor features:
   --mode text|json|rpc, --print, --no-session, --continue, --resume
 
 DSCode commands:
-  /plan /permissions /effort /base-url /status /undo /checkpoints /diff /jobs /mcp /agents /doctor
+  /plan /permissions /effort /route /base-url /status /undo /checkpoints /diff /jobs /mcp /agents /doctor
+
+Runtime traces and evaluation:
+  dscode replay <file> --compare <candidate>  Compare two trace projections
+  dscode replay --execute <fixture> --prompt <task>  Execute a deterministic fixture replay
+  --max-tool-calls <n> --max-duration-ms <n> --max-total-tokens <n> --max-cost <n>
+  --allow-errors                             Do not fail evaluation on runtime errors
 
 Authentication:
   dscode login [provider]           Sign in to a supported model provider
@@ -261,4 +287,10 @@ function splitFlag(argument: string): [string, string | undefined] {
 
 function hasFlag(args: string[], flag: string): boolean {
   return args.some((argument) => argument === flag || argument.startsWith(`${flag}=`));
+}
+
+function parseSelection(value: string, label: string): RouteSelection {
+  const parsed = parseRouteSelection(value);
+  if (!parsed) throw new Error(`${label} must be auto|bootstrap|standard|deep|repair`);
+  return parsed;
 }

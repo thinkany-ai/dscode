@@ -115,6 +115,7 @@ export function printHelp(): void {
       "/plan       Toggle read-only plan mode",
       "/permissions [mode]  Show or set plan/ask/auto/full",
       "/effort [level]      Show or set low/high/max",
+      "/route [profile]     Show or set auto/bootstrap/standard/deep/repair",
       "/status     Show model, workspace, and context size",
       "/exit       Save and quit",
       "",
