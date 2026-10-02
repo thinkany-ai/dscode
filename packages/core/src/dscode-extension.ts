@@ -30,6 +30,18 @@ import { registerLocalImageInput } from "./image-input.js";
 import { partitionSessionFile } from "./home.js";
 import { ManagedProcessRegistry, type ManagedProcessResult } from "./managed-process.js";
 import { MCPManager } from "./mcp.js";
+import {
+  AgentFixtureRecorder,
+  AgentFixtureReplay,
+  readAgentFixtureFileSync,
+} from "./fixture.js";
+import {
+  AgentRuntimeTrace,
+  classifyHttpStatus,
+  summarizeContent,
+  summarizeValue,
+  usageFromPiUsage,
+} from "./observability.js";
 import { applyWorkspacePatch, type ApplyPatchResult } from "./patch.js";
 import {
   formatPlanForExecution,
@@ -122,7 +134,12 @@ const applyPatchParameters = Type.Object({
   }),
 });
 
-export function createDSCodeExtension(options: DSCodeRuntimeOptions): InlineExtension {
+export function createDSCodeExtension(inputOptions: DSCodeRuntimeOptions): InlineExtension {
+  // Keep the extension's provider and tool configuration stable for its lifetime.
+  const options = Object.freeze({
+    ...inputOptions,
+    activeTools: [...inputOptions.activeTools],
+  });
   return {
     name: "dscode",
     factory(pi) {
@@ -137,11 +154,23 @@ export function createDSCodeExtension(options: DSCodeRuntimeOptions): InlineExte
       let toolsBeforePlan: string[] | undefined;
       let projectCommands: string[] = [];
       let lastAgentFailed = false;
+      let traceErrorRecorded = false;
       let sessionPartition = Promise.resolve();
       let planState: PlanState | undefined;
       let lastOfferedPlanRevision = 0;
       const access = new SessionAccessController(options.sandbox, options.network);
+      const trace = new AgentRuntimeTrace();
+      const fixturePath = process.env.DSCODE_FIXTURE_PATH?.trim();
+      const fixture = fixturePath ? readAgentFixtureFileSync(fixturePath) : undefined;
+      const fixtureReplay = fixture ? new AgentFixtureReplay(fixture) : undefined;
+      const fixtureRecorder = options.fixtureCapturePath
+        ? new AgentFixtureRecorder(options.fixtureCapturePath, options.providerId, options.modelId)
+        : undefined;
+      const pendingModelSpans: string[] = [];
+      const pendingCompactionSpans: string[] = [];
+      let traceSequence = 0;
       const effectiveAccess = (): EffectiveAccess => access.effective(permission);
+      const nextTraceSpan = (kind: string): string => `${kind}:${++traceSequence}`;
 
       const queueSessionPartition = (ctx: ExtensionContext): Promise<void> => {
         const sessionFile = ctx.sessionManager.getSessionFile();
@@ -171,7 +200,7 @@ export function createDSCodeExtension(options: DSCodeRuntimeOptions): InlineExte
         ctx.ui.setWidget("dscode-plan", planWidgetLines(planState, ctx));
       };
 
-      registerDeepSeekProvider(pi, options);
+      registerDeepSeekProvider(pi, options, fixtureReplay);
       registerLocalImageInput(pi);
       registerNaturalExit(pi);
       registerSessionCommands(pi);
@@ -223,11 +252,51 @@ export function createDSCodeExtension(options: DSCodeRuntimeOptions): InlineExte
       };
 
       pi.on("before_provider_request", (event, ctx) => {
+        const spanId = nextTraceSpan("model");
+        pendingModelSpans.push(spanId);
+        trace.record({
+          type: "model_request",
+          spanId,
+          status: "started",
+          provider: ctx.model?.provider ?? options.providerId,
+          model: ctx.model?.id ?? options.modelId,
+          input: summarizeValue(event.payload),
+        });
         if (ctx.model?.provider !== "deepseek" || options.transport !== "responses") return;
         return optimizeDeepSeekResponsesPayload(event.payload, { webSearch: options.webSearch });
       });
 
+      pi.on("after_provider_response", (event, ctx) => {
+        const spanId = pendingModelSpans[0] ?? nextTraceSpan("model-response");
+        const failed = event.status >= 400;
+        trace.record({
+          type: "provider_response",
+          spanId,
+          status: failed ? "failed" : "completed",
+          provider: ctx.model?.provider ?? options.providerId,
+          model: ctx.model?.id ?? options.modelId,
+          attributes: {
+            httpStatus: event.status,
+            responseHeaderCount: Object.keys(event.headers).length,
+          },
+        });
+        if (failed) {
+          lastAgentFailed = true;
+          pendingModelSpans.shift();
+          if (!traceErrorRecorded) {
+            traceErrorRecorded = true;
+            trace.recordError(
+              nextTraceSpan("error"),
+              classifyHttpStatus(event.status),
+              "provider response failed",
+              { httpStatus: event.status },
+            );
+          }
+        }
+      });
+
       pi.on("session_start", async (_event, ctx) => {
+        trace.setSession(ctx.sessionManager.getSessionId());
         checkpoints.length = 0;
         undone.clear();
         projectCommands = await discoverProjectCommands(ctx.cwd);
@@ -265,17 +334,39 @@ export function createDSCodeExtension(options: DSCodeRuntimeOptions): InlineExte
       });
 
       pi.on("agent_settled", async (_event, ctx) => {
+        trace.endRun(lastAgentFailed ? "failed" : "completed");
+        await fixtureRecorder?.finish();
+        await trace.flush();
         await queueSessionPartition(ctx);
       });
 
       pi.on("session_shutdown", async (_event, ctx) => {
+        trace.shutdown("cancelled");
+        await fixtureRecorder?.finish();
+        await trace.flush();
         await queueSessionPartition(ctx);
         processes.dispose();
         await mcp.close();
       });
 
-      pi.on("before_agent_start", async (event) => {
+      pi.on("before_agent_start", async (event, ctx) => {
         lastAgentFailed = false;
+        traceErrorRecorded = false;
+        pendingModelSpans.length = 0;
+        const traceId = trace.startRun({
+          sessionId: ctx.sessionManager.getSessionId(),
+          provider: options.providerId,
+          model: options.modelId,
+        });
+        trace.record({
+          type: "agent_start",
+          spanId: `agent:${traceId}`,
+          status: "started",
+          provider: ctx.model?.provider ?? options.providerId,
+          model: ctx.model?.id ?? options.modelId,
+          input: summarizeValue(event.prompt),
+          attributes: { attachedImageCount: event.images?.length ?? 0 },
+        });
         const currentAccess = effectiveAccess();
         const personalizationPrompt = await loadPersonalizationPrompt(options.personalizationFile);
         const systemPrompt = composePersonalizedSystemPrompt(
@@ -302,25 +393,63 @@ export function createDSCodeExtension(options: DSCodeRuntimeOptions): InlineExte
       });
 
       pi.on("tool_call", async (event, ctx) => {
+        trace.record({
+          type: "tool_call",
+          spanId: `tool:${event.toolCallId}`,
+          status: "started",
+          toolName: event.toolName,
+          toolCallId: event.toolCallId,
+          input: summarizeValue(event.input),
+          attributes: { inputKeyCount: Object.keys(event.input).length },
+        });
+        const blockTool = (reason: string, code = "policy") => {
+          trace.record({
+            type: "approval",
+            spanId: `approval:${event.toolCallId}`,
+            status: "failed",
+            toolName: event.toolName,
+            toolCallId: event.toolCallId,
+            attributes: { decision: "denied", code },
+          });
+          trace.record({
+            type: "tool_result",
+            spanId: `tool:${event.toolCallId}`,
+            status: "failed",
+            toolName: event.toolName,
+            toolCallId: event.toolCallId,
+            error: { code, message: "tool execution blocked" },
+            output: summarizeValue(reason),
+          });
+          return { block: true, reason };
+        };
+        const recordApproval = (decision: "approved" | "denied", code = "approval") => {
+          trace.record({
+            type: "approval",
+            spanId: `approval:${event.toolCallId}`,
+            status: decision === "approved" ? "completed" : "failed",
+            toolName: event.toolName,
+            toolCallId: event.toolCallId,
+            attributes: { decision, code },
+          });
+        };
         if (
           event.toolName === "bash" ||
           event.toolName === "run_command" ||
           event.toolName === "edit" ||
           event.toolName === "write"
         ) {
-          return {
-            block: true,
-            reason:
-              event.toolName === "bash" || event.toolName === "run_command"
-                ? "This shell tool bypasses DSCode's managed OS sandbox. Use exec_command instead."
-                : "This write tool bypasses DSCode checkpoints. Use apply_patch instead.",
-          };
+          return blockTool(
+            event.toolName === "bash" || event.toolName === "run_command"
+              ? "This shell tool bypasses DSCode's managed OS sandbox. Use exec_command instead."
+              : "This write tool bypasses DSCode checkpoints. Use apply_patch instead.",
+            "bypass",
+          );
         }
         if (permission === "plan" && !planAllowedTools.has(event.toolName)) {
-          return {
-            block: true,
-            reason: `Plan mode does not allow ${event.toolName}. Run /plan to leave plan mode.`,
-          };
+          return blockTool(
+            `Plan mode does not allow ${event.toolName}. Run /plan to leave plan mode.`,
+            "plan_mode",
+          );
         }
         const externalMcp = event.toolName.startsWith("mcp__");
         const command =
@@ -331,10 +460,10 @@ export function createDSCodeExtension(options: DSCodeRuntimeOptions): InlineExte
             : undefined;
         const dangerousCommand = command !== undefined && classifyCommand(command) === "dangerous";
         if (permission === "plan" && dangerousCommand) {
-          return {
-            block: true,
-            reason: "Plan mode blocks destructive commands. Leave plan mode before running this command.",
-          };
+          return blockTool(
+            "Plan mode blocks destructive commands. Leave plan mode before running this command.",
+            "dangerous_command",
+          );
         }
         const needsApproval =
           permission === "ask" ||
@@ -359,18 +488,18 @@ export function createDSCodeExtension(options: DSCodeRuntimeOptions): InlineExte
           return;
         }
         if (!ctx.hasUI) {
-          return {
-            block: true,
-            reason:
-              "This action requires an interactive approval UI. Use --permission full for an explicitly trusted non-interactive run.",
-          };
+          return blockTool(
+            "This action requires an interactive approval UI. Use --permission full for an explicitly trusted non-interactive run.",
+            "non_interactive",
+          );
         }
         if (dangerousCommand) {
           const approved = await ctx.ui.confirm(
             "Run destructive command?",
             `${command}\n\nThis may delete data or alter system/process state.`,
           );
-          if (!approved) return { block: true, reason: "Destructive command denied by user" };
+          if (!approved) return blockTool("Destructive command denied by user", "user_denied");
+          recordApproval("approved", "destructive_command");
         } else if (
           event.toolName === "apply_patch" &&
           isRecord(event.input) &&
@@ -378,15 +507,93 @@ export function createDSCodeExtension(options: DSCodeRuntimeOptions): InlineExte
         ) {
           for (const section of patchApprovalSections(event.input.input)) {
             const approved = await ctx.ui.confirm(`Apply ${section.file}?`, section.patch);
-            if (!approved) return { block: true, reason: `Denied ${section.file} by user` };
+            if (!approved) return blockTool(`Denied ${section.file} by user`, "user_denied");
           }
+          recordApproval("approved", "patch");
         } else {
           const approved = await ctx.ui.confirm(
             `Allow ${event.toolName}?`,
             approvalSummary(event.toolName, event.input),
           );
-          if (!approved) return { block: true, reason: "Denied by user" };
+          if (!approved) return blockTool("Denied by user", "user_denied");
+          recordApproval("approved");
         }
+      });
+
+      pi.on("tool_result", (event) => {
+        trace.record({
+          type: "tool_result",
+          spanId: `tool:${event.toolCallId}`,
+          status: event.isError ? "failed" : "completed",
+          toolName: event.toolName,
+          toolCallId: event.toolCallId,
+          content: summarizeContent(event.content),
+          output: summarizeValue(event.details),
+          ...(event.usage ? { usage: usageFromPiUsage(event.usage) } : {}),
+          ...(event.isError ? { error: { code: "tool", message: "tool execution failed" } } : {}),
+        });
+      });
+
+      pi.on("message_start", (event) => {
+        if (event.message.role !== "assistant" || pendingModelSpans.length > 0) return;
+        const spanId = nextTraceSpan("model");
+        pendingModelSpans.push(spanId);
+        trace.record({
+          type: "model_request",
+          spanId,
+          status: "started",
+          provider: event.message.provider,
+          model: event.message.model,
+        });
+      });
+
+      pi.on("turn_start", (event) => {
+        trace.record({
+          type: "turn_start",
+          spanId: `turn:${event.turnIndex}`,
+          turnId: `turn:${event.turnIndex}`,
+          status: "started",
+          attributes: { turnIndex: event.turnIndex },
+        });
+      });
+
+      pi.on("turn_end", (event) => {
+        trace.record({
+          type: "turn_end",
+          spanId: `turn:${event.turnIndex}`,
+          turnId: `turn:${event.turnIndex}`,
+          status: "completed",
+          attributes: { toolResultCount: event.toolResults.length },
+        });
+      });
+
+      pi.on("session_before_compact", (event) => {
+        const spanId = nextTraceSpan("compaction");
+        pendingCompactionSpans.push(spanId);
+        trace.record({
+          type: "compaction",
+          spanId,
+          status: "started",
+          attributes: {
+            reason: event.reason,
+            willRetry: event.willRetry,
+            branchEntries: event.branchEntries.length,
+          },
+        });
+      });
+
+      pi.on("session_compact", (event) => {
+        const spanId = pendingCompactionSpans.shift() ?? nextTraceSpan("compaction-result");
+        trace.record({
+          type: "compaction",
+          spanId,
+          status: "completed",
+          attributes: {
+            reason: event.reason,
+            willRetry: event.willRetry,
+            tokensBefore: event.compactionEntry.tokensBefore,
+          },
+        });
       });
 
       pi.on("user_bash", (_event, ctx) => {
@@ -420,12 +627,54 @@ export function createDSCodeExtension(options: DSCodeRuntimeOptions): InlineExte
 
       pi.on("message_end", (event) => {
         if (event.message.role !== "assistant") return;
+        fixtureRecorder?.record(event.message);
+        const modelSpanId = pendingModelSpans.shift() ?? nextTraceSpan("model-response");
+        const stopReason =
+          "stopReason" in event.message && typeof event.message.stopReason === "string"
+            ? event.message.stopReason
+            : undefined;
+        const usage =
+          "usage" in event.message && event.message.usage
+            ? usageFromPiUsage(event.message.usage)
+            : undefined;
+        trace.record({
+          type: "model_response",
+          spanId: modelSpanId,
+          status: stopReason === "error" || stopReason === "aborted" ? "failed" : "completed",
+          provider: options.providerId,
+          model: options.modelId,
+          ...(usage ? { usage } : {}),
+          content: summarizeContent(event.message.content),
+          ...(stopReason ? { attributes: { stopReason } } : {}),
+        });
         lastAgentFailed =
           "stopReason" in event.message &&
           (event.message.stopReason === "error" || event.message.stopReason === "aborted");
+        if (lastAgentFailed && !traceErrorRecorded) {
+          traceErrorRecorded = true;
+          trace.recordError(
+            nextTraceSpan("error"),
+            event.message.stopReason === "aborted" ? "aborted" : "provider",
+            "model response failed",
+            {
+              stopReason:
+                "stopReason" in event.message && typeof event.message.stopReason === "string"
+                  ? event.message.stopReason
+                  : "unknown",
+            },
+          );
+        }
       });
 
       pi.on("agent_end", async (_event, ctx) => {
+        const traceId = trace.getTraceId();
+        if (traceId) {
+          trace.record({
+            type: "agent_end",
+            spanId: `agent:${traceId}`,
+            status: lastAgentFailed ? "failed" : "completed",
+          });
+        }
         if (
           permission !== "plan" ||
           ctx.mode !== "tui" ||
@@ -762,8 +1011,16 @@ export function createDSCodeExtension(options: DSCodeRuntimeOptions): InlineExte
   };
 }
 
-function registerDeepSeekProvider(pi: ExtensionAPI, options: DSCodeRuntimeOptions): void {
-  const api = options.transport === "responses" ? "openai-responses" : "openai-completions";
+function registerDeepSeekProvider(
+  pi: ExtensionAPI,
+  options: DSCodeRuntimeOptions,
+  fixtureReplay?: AgentFixtureReplay,
+): void {
+  const api = fixtureReplay
+    ? "dscode-fixture"
+    : options.transport === "responses"
+      ? "openai-responses"
+      : "openai-completions";
   const models = [
     {
       id: "deepseek-v4-flash",
@@ -792,9 +1049,11 @@ function registerDeepSeekProvider(pi: ExtensionAPI, options: DSCodeRuntimeOption
   pi.registerProvider("deepseek", {
     name: "DeepSeek",
     baseUrl: options.baseUrl,
-    apiKey: "$DEEPSEEK_API_KEY",
+    apiKey: fixtureReplay ? "dscode-fixture" : "$DEEPSEEK_API_KEY",
     api,
-    authHeader: true,
+    ...(fixtureReplay
+      ? { streamSimple: (model, context, streamOptions) => fixtureReplay.stream(model, context, streamOptions) }
+      : { authHeader: true }),
     models: models.map((model) => ({
       id: model.id,
       name: model.name,
